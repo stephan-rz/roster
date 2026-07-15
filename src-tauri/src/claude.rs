@@ -274,18 +274,52 @@ pub fn is_claude_data_dir(dir: &Path) -> bool {
         || dir.join("Network").join("Cookies").exists()
 }
 
-/// Existing Claude data folders on this machine that could be adopted as
-/// profiles: the normal install (%APPDATA%\Claude) and any folders left by the
-/// old launcher (%APPDATA%\Claude-Profiles\*).
+/// The single "default" Claude account lives in different places depending on
+/// how Claude was installed. Returned in priority order:
+///   1. %APPDATA%\Claude                                    (direct download / Electron default)
+///   2. %LOCALAPPDATA%\Packages\<PFN>\LocalCache\Roaming\Claude  (Microsoft Store / MSIX, virtualized)
+///   3. %LOCALAPPDATA%\AnthropicClaude
+fn default_claude_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        dirs.push(Path::new(&appdata).join("Claude"));
+    }
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let local = Path::new(&local);
+        if let Ok(entries) = fs::read_dir(local.join("Packages")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_lowercase();
+                if name.contains("claude") || name.contains("anthropic") {
+                    dirs.push(
+                        entry
+                            .path()
+                            .join("LocalCache")
+                            .join("Roaming")
+                            .join("Claude"),
+                    );
+                }
+            }
+        }
+        dirs.push(local.join("AnthropicClaude"));
+    }
+    dirs
+}
+
+/// Existing Claude data folders that could be adopted as profiles: the default
+/// install (whichever location it uses) plus any folders left by the old
+/// launcher (%APPDATA%\Claude-Profiles\*).
 pub fn candidate_data_dirs() -> Vec<PathBuf> {
     let mut out = Vec::new();
-    if let Ok(appdata) = std::env::var("APPDATA") {
-        let base = Path::new(&appdata);
-        let default = base.join("Claude");
-        if is_claude_data_dir(&default) {
-            out.push(default);
+    // Exactly one "default" account — the first location that actually exists,
+    // so machines with data in more than one place don't get duplicates.
+    for def in default_claude_dirs() {
+        if is_claude_data_dir(&def) {
+            out.push(def);
+            break;
         }
-        if let Ok(entries) = fs::read_dir(base.join("Claude-Profiles")) {
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if let Ok(entries) = fs::read_dir(Path::new(&appdata).join("Claude-Profiles")) {
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.is_dir() && is_claude_data_dir(&p) {

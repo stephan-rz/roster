@@ -270,9 +270,6 @@ fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
             .map(|p| claude::norm(&p.data_dir))
             .collect()
     };
-    let default_dir = std::env::var("APPDATA")
-        .map(|a| claude::norm(&format!("{}\\Claude", a)))
-        .unwrap_or_default();
     claude::candidate_data_dirs()
         .into_iter()
         .filter_map(|p| {
@@ -280,12 +277,18 @@ fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
             if existing.contains(&claude::norm(&ds)) {
                 return None;
             }
-            let suggested_name = if claude::norm(&ds) == default_dir {
+            // Every "default" location ends in \Claude; old-launcher profiles
+            // end in the profile name (\Work, …).
+            let base = p
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let suggested_name = if base.eq_ignore_ascii_case("Claude") {
                 "Personal".to_string()
+            } else if base.is_empty() {
+                "Imported".to_string()
             } else {
-                p.file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "Imported".to_string())
+                base
             };
             Some(ImportCandidate {
                 signed_in: claude::is_signed_in(&ds),
