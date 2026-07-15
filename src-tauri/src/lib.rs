@@ -1,14 +1,209 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod claude;
+mod profiles;
+
+use profiles::{load_config, save_config, Config, Profile};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::State;
+
+pub struct AppState {
+    config: Mutex<Config>,
+}
+
+/// A profile plus its live status, shipped to the UI.
+#[derive(serde::Serialize)]
+pub struct ProfileView {
+    id: String,
+    name: String,
+    color: String,
+    data_dir: String,
+    running: bool,
+    signed_in: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ClaudeStatus {
+    found: bool,
+    path: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct LaunchCheck {
+    first_run: bool,
+    others_running: bool,
+}
+
+fn build_views(config: &Config) -> Vec<ProfileView> {
+    let running: Vec<String> = claude::running_data_dirs()
+        .iter()
+        .map(|d| claude::norm(d))
+        .collect();
+    config
+        .profiles
+        .iter()
+        .map(|p| ProfileView {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            color: p.color.clone(),
+            data_dir: p.data_dir.clone(),
+            running: running.contains(&claude::norm(&p.data_dir)),
+            signed_in: claude::is_signed_in(&p.data_dir),
+        })
+        .collect()
+}
+
+fn new_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("p{}", nanos)
+}
+
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+fn list_profiles(state: State<AppState>) -> Vec<ProfileView> {
+    let config = state.config.lock().unwrap();
+    build_views(&config)
+}
+
+#[tauri::command]
+fn add_profile(
+    state: State<AppState>,
+    name: String,
+    color: String,
+) -> Result<Vec<ProfileView>, String> {
+    let mut config = state.config.lock().unwrap();
+    let id = new_id();
+    let data_dir = profiles::profiles_root()
+        .join(&id)
+        .to_string_lossy()
+        .to_string();
+    config.profiles.push(Profile {
+        id,
+        name: name.trim().to_string(),
+        color,
+        data_dir,
+    });
+    save_config(&config).map_err(|e| e.to_string())?;
+    Ok(build_views(&config))
+}
+
+#[tauri::command]
+fn update_profile(
+    state: State<AppState>,
+    id: String,
+    name: String,
+    color: String,
+) -> Result<Vec<ProfileView>, String> {
+    let mut config = state.config.lock().unwrap();
+    if let Some(p) = config.profiles.iter_mut().find(|p| p.id == id) {
+        p.name = name.trim().to_string();
+        p.color = color;
+    }
+    save_config(&config).map_err(|e| e.to_string())?;
+    Ok(build_views(&config))
+}
+
+/// Removing a profile forgets it but never deletes its data folder.
+#[tauri::command]
+fn remove_profile(state: State<AppState>, id: String) -> Result<Vec<ProfileView>, String> {
+    let mut config = state.config.lock().unwrap();
+    config.profiles.retain(|p| p.id != id);
+    save_config(&config).map_err(|e| e.to_string())?;
+    Ok(build_views(&config))
+}
+
+#[tauri::command]
+fn pre_launch_check(state: State<AppState>, id: String) -> LaunchCheck {
+    let config = state.config.lock().unwrap();
+    let first_run = config
+        .profiles
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| claude::dir_is_empty_or_missing(&p.data_dir))
+        .unwrap_or(false);
+    LaunchCheck {
+        first_run,
+        others_running: claude::any_claude_running(),
+    }
+}
+
+#[tauri::command]
+fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
+    let (data_dir, override_path) = {
+        let config = state.config.lock().unwrap();
+        let p = config
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or("Profile not found")?;
+        (p.data_dir.clone(), config.claude_path.clone())
+    };
+    let exe = claude::detect_claude(&override_path)
+        .ok_or("Could not find Claude.exe. Set its location in Settings.")?;
+    claude::launch(&exe, &data_dir).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn claude_status(state: State<AppState>) -> ClaudeStatus {
+    let config = state.config.lock().unwrap();
+    let detected = claude::detect_claude(&config.claude_path);
+    ClaudeStatus {
+        found: detected.is_some(),
+        path: detected.map(|p| p.to_string_lossy().to_string()),
+    }
+}
+
+#[tauri::command]
+fn set_claude_path(
+    state: State<AppState>,
+    path: Option<String>,
+) -> Result<ClaudeStatus, String> {
+    let mut config = state.config.lock().unwrap();
+    config.claude_path = path.filter(|s| !s.trim().is_empty());
+    save_config(&config).map_err(|e| e.to_string())?;
+    let detected = claude::detect_claude(&config.claude_path);
+    Ok(ClaudeStatus {
+        found: detected.is_some(),
+        path: detected.map(|p| p.to_string_lossy().to_string()),
+    })
+}
+
+#[tauri::command]
+fn open_data_dir(state: State<AppState>, id: String) -> Result<(), String> {
+    let dir = {
+        let config = state.config.lock().unwrap();
+        config
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.data_dir.clone())
+            .ok_or("Profile not found")?
+    };
+    std::fs::create_dir_all(&dir).ok();
+    claude::open_in_explorer(&dir).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let config = load_config();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .manage(AppState {
+            config: Mutex::new(config),
+        })
+        .invoke_handler(tauri::generate_handler![
+            list_profiles,
+            add_profile,
+            update_profile,
+            remove_profile,
+            pre_launch_check,
+            launch_profile,
+            claude_status,
+            set_claude_path,
+            open_data_dir
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

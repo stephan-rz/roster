@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "roster",
+  "productName": "Roster",
   "version": "0.1.0",
   "identifier": "com.roster.desktop",
   "build": {
@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "roster",
-        "width": 800,
-        "height": 600
+        "title": "Roster",
+        "width": 940,
+        "height": 660,
+        "minWidth": 760,
+        "minHeight": 540,
+        "resizable": true
       }
     ],
     "security": {
