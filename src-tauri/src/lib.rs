@@ -275,7 +275,7 @@ fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
                 return None;
             }
             let suggested_name = if claude::norm(&ds) == default_dir {
-                "Default".to_string()
+                "Personal".to_string()
             } else {
                 p.file_name()
                     .map(|s| s.to_string_lossy().to_string())

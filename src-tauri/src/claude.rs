@@ -227,6 +227,23 @@ fn extract_value(data: &[u8], key: &[u8], valid: impl Fn(u8) -> bool, max: usize
 /// The org name is a bare `name` field (not `full_name` / `display_name`), so
 /// match a `name` not preceded by a letter or underscore, with a value that
 /// differs from the person's own name.
+/// Drop a leading serialization artifact (a tag/length byte that rendered as
+/// printable ASCII, e.g. "c0Stephan") from a scraped value.
+fn clean_org(v: &str) -> Option<String> {
+    let b = v.as_bytes();
+    let start = if b.len() >= 2 && b[0].is_ascii_lowercase() && b[1].is_ascii_digit() {
+        2
+    } else {
+        0
+    };
+    let c = v[start..].trim().to_string();
+    if c.len() >= 2 {
+        Some(c)
+    } else {
+        None
+    }
+}
+
 fn extract_org(data: &[u8], person: Option<&str>) -> Option<String> {
     let printable = |b: u8| b >= 0x20 && b != b'"';
     let mut search = 0;
@@ -235,8 +252,10 @@ fn extract_org(data: &[u8], person: Option<&str>) -> Option<String> {
         let prev = if idx == 0 { 0 } else { data[idx - 1] };
         if !prev.is_ascii_alphabetic() && prev != b'_' {
             if let Some(v) = extract_value(&data[idx..], b"name", printable, 80) {
-                if person != Some(v.as_str()) {
-                    return Some(v);
+                if let Some(c) = clean_org(&v) {
+                    if person != Some(c.as_str()) {
+                        return Some(c);
+                    }
                 }
             }
         }
