@@ -326,6 +326,16 @@ fn import_profile(
 pub fn run() {
     let config = load_config();
     tauri::Builder::default()
+        // Must be the first plugin: if Roster is already running, focus the
+        // existing window instead of starting a second, divergent instance.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             config: Mutex::new(config),
