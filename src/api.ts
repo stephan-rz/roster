@@ -49,7 +49,7 @@ export const api = {
   openDataDir: (id: string) => invoke<void>("open_data_dir", { id }),
   discoverImportable: () => invoke<ImportCandidate[]>("discover_importable"),
   importProfile: (name: string, color: string, dataDir: string) =>
-    invoke<Profile[]>("import_profile", { name, color, data_dir: dataDir }),
+    invoke<Profile[]>("import_profile", { name, color, dataDir }),
 };
 
 export const PALETTE = [
