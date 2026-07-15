@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export interface Account {
+  email: string | null;
+  name: string | null;
+  org: string | null;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -7,6 +13,7 @@ export interface Profile {
   data_dir: string;
   running: boolean;
   signed_in: boolean;
+  account: Account | null;
 }
 
 export interface ClaudeStatus {
@@ -21,6 +28,7 @@ export interface LaunchCheck {
 
 export const api = {
   listProfiles: () => invoke<Profile[]>("list_profiles"),
+  refreshAccounts: () => invoke<Profile[]>("refresh_accounts"),
   addProfile: (name: string, color: string) =>
     invoke<Profile[]>("add_profile", { name, color }),
   updateProfile: (id: string, name: string, color: string) =>

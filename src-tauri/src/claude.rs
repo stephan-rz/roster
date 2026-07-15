@@ -134,3 +134,116 @@ pub fn launch(exe: &Path, data_dir: &str) -> std::io::Result<u32> {
 pub fn open_in_explorer(path: &str) -> std::io::Result<()> {
     Command::new("explorer").arg(path).spawn().map(|_| ())
 }
+
+/// The signed-in account identity for a profile, read from Claude's cache.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Account {
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub org: Option<String>,
+}
+
+/// Best-effort read of the signed-in account from a profile's IndexedDB.
+///
+/// Claude caches the account bootstrap (email, name, organization) under the
+/// https://claude.ai origin. There's no official schema, so we locate the
+/// `email_address` field and scrape the nearby values heuristically. If the
+/// format ever changes this simply returns `None` and the UI falls back to a
+/// plain "Signed in" badge — nothing breaks.
+pub fn read_account(data_dir: &str) -> Option<Account> {
+    let idb = Path::new(data_dir).join("IndexedDB");
+    if !idb.exists() {
+        return None;
+    }
+    let mut stack = vec![idb];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            match entry.metadata() {
+                Ok(m) if m.len() <= 64 * 1024 * 1024 => {}
+                _ => continue,
+            }
+            let Ok(raw) = fs::read(&path) else { continue };
+            if let Some(pos) = find_sub(&raw, b"email_address") {
+                let start = pos.saturating_sub(64);
+                let end = (pos + 8192).min(raw.len());
+                // Keep one byte per element (drop NULs so UTF-16 ASCII reads cleanly).
+                let data: Vec<u8> = raw[start..end].iter().copied().filter(|&b| b != 0).collect();
+                if let Some(acc) = parse_account(&data) {
+                    return Some(acc);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn find_sub(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return None;
+    }
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+fn parse_account(data: &[u8]) -> Option<Account> {
+    let email = extract_value(data, b"email_address", |b| {
+        b.is_ascii_alphanumeric() || b"@._%+-".contains(&b)
+    }, 128)
+    .filter(|s| s.contains('@'));
+    email.as_ref()?;
+    let printable = |b: u8| b >= 0x20 && b != b'"';
+    let name = extract_value(data, b"full_name", printable, 80);
+    let org = extract_org(data, name.as_deref());
+    Some(Account { email, name, org })
+}
+
+/// After `key`, skip a few serialization tag/length bytes, then collect the
+/// value until a control byte or string delimiter.
+fn extract_value(data: &[u8], key: &[u8], valid: impl Fn(u8) -> bool, max: usize) -> Option<String> {
+    let start = find_sub(data, key)? + key.len();
+    let mut i = start;
+    let mut skipped = 0;
+    while i < data.len() && skipped < 8 && !valid(data[i]) {
+        i += 1;
+        skipped += 1;
+    }
+    let vstart = i;
+    while i < data.len() && (i - vstart) < max && valid(data[i]) {
+        i += 1;
+    }
+    let out = String::from_utf8_lossy(&data[vstart..i]).trim().to_string();
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// The org name is a bare `name` field (not `full_name` / `display_name`), so
+/// match a `name` not preceded by a letter or underscore, with a value that
+/// differs from the person's own name.
+fn extract_org(data: &[u8], person: Option<&str>) -> Option<String> {
+    let printable = |b: u8| b >= 0x20 && b != b'"';
+    let mut search = 0;
+    while let Some(rel) = find_sub(&data[search..], b"name") {
+        let idx = search + rel;
+        let prev = if idx == 0 { 0 } else { data[idx - 1] };
+        if !prev.is_ascii_alphabetic() && prev != b'_' {
+            if let Some(v) = extract_value(&data[idx..], b"name", printable, 80) {
+                if person != Some(v.as_str()) {
+                    return Some(v);
+                }
+            }
+        }
+        search = idx + 4;
+        if search >= data.len() {
+            break;
+        }
+    }
+    None
+}

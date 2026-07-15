@@ -115,6 +115,19 @@ function ProfileCard({
               <div className="mt-0.5">
                 <Badge profile={profile} />
               </div>
+              {profile.account?.email && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+                  {profile.account.name && (
+                    <span className="font-medium text-slate-300">{profile.account.name}</span>
+                  )}
+                  <span className="truncate text-slate-500">{profile.account.email}</span>
+                  {profile.account.org && (
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">
+                      {profile.account.org}
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -324,9 +337,19 @@ export default function App() {
     }
   }, []);
 
+  // Reads each signed-in profile's account from disk (slower) — done on load
+  // and after launches, not on every poll.
+  const refreshAccounts = useCallback(async () => {
+    try {
+      setProfiles(await api.refreshAccounts());
+    } catch {
+      /* best-effort */
+    }
+  }, []);
+
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    refresh().then(refreshAccounts);
+  }, [refresh, refreshAccounts]);
 
   useEffect(() => {
     const t = setInterval(refreshStatus, 4000);
@@ -363,6 +386,8 @@ export default function App() {
         setLaunchingId(null);
         refreshStatus();
       }, 1800);
+      // A fresh sign-in takes a few seconds to persist — pick up the account.
+      setTimeout(refreshAccounts, 6000);
     }
   }
 

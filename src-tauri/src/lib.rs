@@ -2,15 +2,20 @@ mod claude;
 mod profiles;
 
 use profiles::{load_config, save_config, Config, Profile};
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 
 pub struct AppState {
     config: Mutex<Config>,
+    /// Cache of resolved account identities, keyed by data dir. Populated by
+    /// `refresh_accounts` (which does the IO) so the frequent status poll stays
+    /// cheap.
+    accounts: Mutex<HashMap<String, claude::Account>>,
 }
 
-/// A profile plus its live status, shipped to the UI.
+/// A profile plus its live status and (if known) signed-in account, for the UI.
 #[derive(serde::Serialize)]
 pub struct ProfileView {
     id: String,
@@ -19,6 +24,7 @@ pub struct ProfileView {
     data_dir: String,
     running: bool,
     signed_in: bool,
+    account: Option<claude::Account>,
 }
 
 #[derive(serde::Serialize)]
@@ -33,7 +39,7 @@ struct LaunchCheck {
     others_running: bool,
 }
 
-fn build_views(config: &Config) -> Vec<ProfileView> {
+fn build_views(config: &Config, accounts: &HashMap<String, claude::Account>) -> Vec<ProfileView> {
     let running: Vec<String> = claude::running_data_dirs()
         .iter()
         .map(|d| claude::norm(d))
@@ -41,15 +47,30 @@ fn build_views(config: &Config) -> Vec<ProfileView> {
     config
         .profiles
         .iter()
-        .map(|p| ProfileView {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            color: p.color.clone(),
-            data_dir: p.data_dir.clone(),
-            running: running.contains(&claude::norm(&p.data_dir)),
-            signed_in: claude::is_signed_in(&p.data_dir),
+        .map(|p| {
+            let signed_in = claude::is_signed_in(&p.data_dir);
+            ProfileView {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                color: p.color.clone(),
+                data_dir: p.data_dir.clone(),
+                running: running.contains(&claude::norm(&p.data_dir)),
+                signed_in,
+                account: if signed_in {
+                    accounts.get(&p.data_dir).cloned()
+                } else {
+                    None
+                },
+            }
         })
         .collect()
+}
+
+/// Lock config + accounts and render the current views (no IO).
+fn views(state: &State<AppState>) -> Vec<ProfileView> {
+    let config = state.config.lock().unwrap();
+    let accounts = state.accounts.lock().unwrap();
+    build_views(&config, &accounts)
 }
 
 fn new_id() -> String {
@@ -62,8 +83,7 @@ fn new_id() -> String {
 
 #[tauri::command]
 fn list_profiles(state: State<AppState>) -> Vec<ProfileView> {
-    let config = state.config.lock().unwrap();
-    build_views(&config)
+    views(&state)
 }
 
 #[tauri::command]
@@ -72,20 +92,22 @@ fn add_profile(
     name: String,
     color: String,
 ) -> Result<Vec<ProfileView>, String> {
-    let mut config = state.config.lock().unwrap();
-    let id = new_id();
-    let data_dir = profiles::profiles_root()
-        .join(&id)
-        .to_string_lossy()
-        .to_string();
-    config.profiles.push(Profile {
-        id,
-        name: name.trim().to_string(),
-        color,
-        data_dir,
-    });
-    save_config(&config).map_err(|e| e.to_string())?;
-    Ok(build_views(&config))
+    {
+        let mut config = state.config.lock().unwrap();
+        let id = new_id();
+        let data_dir = profiles::profiles_root()
+            .join(&id)
+            .to_string_lossy()
+            .to_string();
+        config.profiles.push(Profile {
+            id,
+            name: name.trim().to_string(),
+            color,
+            data_dir,
+        });
+        save_config(&config).map_err(|e| e.to_string())?;
+    }
+    Ok(views(&state))
 }
 
 #[tauri::command]
@@ -95,22 +117,26 @@ fn update_profile(
     name: String,
     color: String,
 ) -> Result<Vec<ProfileView>, String> {
-    let mut config = state.config.lock().unwrap();
-    if let Some(p) = config.profiles.iter_mut().find(|p| p.id == id) {
-        p.name = name.trim().to_string();
-        p.color = color;
+    {
+        let mut config = state.config.lock().unwrap();
+        if let Some(p) = config.profiles.iter_mut().find(|p| p.id == id) {
+            p.name = name.trim().to_string();
+            p.color = color;
+        }
+        save_config(&config).map_err(|e| e.to_string())?;
     }
-    save_config(&config).map_err(|e| e.to_string())?;
-    Ok(build_views(&config))
+    Ok(views(&state))
 }
 
 /// Removing a profile forgets it but never deletes its data folder.
 #[tauri::command]
 fn remove_profile(state: State<AppState>, id: String) -> Result<Vec<ProfileView>, String> {
-    let mut config = state.config.lock().unwrap();
-    config.profiles.retain(|p| p.id != id);
-    save_config(&config).map_err(|e| e.to_string())?;
-    Ok(build_views(&config))
+    {
+        let mut config = state.config.lock().unwrap();
+        config.profiles.retain(|p| p.id != id);
+        save_config(&config).map_err(|e| e.to_string())?;
+    }
+    Ok(views(&state))
 }
 
 #[tauri::command]
@@ -145,6 +171,43 @@ fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Re-read the signed-in account for each profile from disk and refresh the
+/// cache. Called by the UI on load and after a launch — not on every poll.
+#[tauri::command]
+fn refresh_accounts(state: State<AppState>) -> Vec<ProfileView> {
+    let dirs: Vec<String> = {
+        let config = state.config.lock().unwrap();
+        config
+            .profiles
+            .iter()
+            .filter(|p| claude::is_signed_in(&p.data_dir))
+            .map(|p| p.data_dir.clone())
+            .collect()
+    };
+    // Do the (potentially slow) IndexedDB reads without holding any lock.
+    let found: Vec<(String, Option<claude::Account>)> = dirs
+        .into_iter()
+        .map(|d| {
+            let a = claude::read_account(&d);
+            (d, a)
+        })
+        .collect();
+    {
+        let mut accounts = state.accounts.lock().unwrap();
+        for (d, a) in found {
+            match a {
+                Some(acc) => {
+                    accounts.insert(d, acc);
+                }
+                None => {
+                    accounts.remove(&d);
+                }
+            }
+        }
+    }
+    views(&state)
+}
+
 #[tauri::command]
 fn claude_status(state: State<AppState>) -> ClaudeStatus {
     let config = state.config.lock().unwrap();
@@ -156,10 +219,7 @@ fn claude_status(state: State<AppState>) -> ClaudeStatus {
 }
 
 #[tauri::command]
-fn set_claude_path(
-    state: State<AppState>,
-    path: Option<String>,
-) -> Result<ClaudeStatus, String> {
+fn set_claude_path(state: State<AppState>, path: Option<String>) -> Result<ClaudeStatus, String> {
     let mut config = state.config.lock().unwrap();
     config.claude_path = path.filter(|s| !s.trim().is_empty());
     save_config(&config).map_err(|e| e.to_string())?;
@@ -192,6 +252,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             config: Mutex::new(config),
+            accounts: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             list_profiles,
@@ -200,6 +261,7 @@ pub fn run() {
             remove_profile,
             pre_launch_check,
             launch_profile,
+            refresh_accounts,
             claude_status,
             set_claude_path,
             open_data_dir
