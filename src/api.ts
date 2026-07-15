@@ -26,6 +26,13 @@ export interface LaunchCheck {
   others_running: boolean;
 }
 
+export interface ImportCandidate {
+  data_dir: string;
+  suggested_name: string;
+  signed_in: boolean;
+  account: Account | null;
+}
+
 export const api = {
   listProfiles: () => invoke<Profile[]>("list_profiles"),
   refreshAccounts: () => invoke<Profile[]>("refresh_accounts"),
@@ -40,6 +47,9 @@ export const api = {
   setClaudePath: (path: string | null) =>
     invoke<ClaudeStatus>("set_claude_path", { path }),
   openDataDir: (id: string) => invoke<void>("open_data_dir", { id }),
+  discoverImportable: () => invoke<ImportCandidate[]>("discover_importable"),
+  importProfile: (name: string, color: string, dataDir: string) =>
+    invoke<Profile[]>("import_profile", { name, color, data_dir: dataDir }),
 };
 
 export const PALETTE = [

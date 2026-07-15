@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, PALETTE, type ClaudeStatus, type Profile } from "./api";
+import { api, PALETTE, type ClaudeStatus, type ImportCandidate, type Profile } from "./api";
 
 /* ------------------------------- icons ------------------------------- */
 const Icon = {
@@ -39,6 +39,11 @@ const Icon = {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" {...p}>
       <path d="M12 3 3 8l9 5 9-5-9-5z" />
       <path d="m3 13 9 5 9-5" />
+    </svg>
+  ),
+  Download: (p: any) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
     </svg>
   ),
 };
@@ -303,6 +308,140 @@ function SettingsDialog({
   );
 }
 
+/* ------------------------------- import dialog ------------------------------- */
+type ImportRow = { cand: ImportCandidate; selected: boolean; name: string; color: string };
+
+function ImportDialog({
+  colorOffset,
+  onImported,
+  onError,
+  onClose,
+}: {
+  colorOffset: number;
+  onImported: (ps: Profile[]) => void;
+  onError: (e: string) => void;
+  onClose: () => void;
+}) {
+  const [rows, setRows] = useState<ImportRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api
+      .discoverImportable()
+      .then((cands) =>
+        setRows(
+          cands.map((c, i) => ({
+            cand: c,
+            selected: true,
+            name: c.suggested_name,
+            color: PALETTE[(colorOffset + i) % PALETTE.length],
+          })),
+        ),
+      )
+      .catch(() => setRows([]));
+  }, [colorOffset]);
+
+  const patch = (i: number, p: Partial<ImportRow>) =>
+    setRows((rs) => (rs ? rs.map((r, j) => (j === i ? { ...r, ...p } : r)) : rs));
+
+  const cycleColor = (i: number) =>
+    setRows((rs) =>
+      rs
+        ? rs.map((r, j) =>
+            j === i ? { ...r, color: PALETTE[(PALETTE.indexOf(r.color) + 1) % PALETTE.length] } : r,
+          )
+        : rs,
+    );
+
+  const chosen = rows?.filter((r) => r.selected && r.name.trim()).length ?? 0;
+
+  async function doImport() {
+    if (!rows) return;
+    setBusy(true);
+    let latest: Profile[] | null = null;
+    try {
+      for (const r of rows.filter((r) => r.selected && r.name.trim())) {
+        latest = await api.importProfile(r.name.trim(), r.color, r.cand.data_dir);
+      }
+      if (latest) onImported(latest);
+      onClose();
+    } catch (e) {
+      onError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Import existing accounts" onClose={onClose}>
+      {rows === null ? (
+        <div className="py-8 text-center text-sm text-slate-500">Scanning for Claude folders…</div>
+      ) : rows.length === 0 ? (
+        <div className="py-8 text-center text-sm text-slate-500">
+          No existing Claude folders found to import.
+        </div>
+      ) : (
+        <>
+          <p className="mb-3 text-xs text-slate-500">
+            Found these on your PC. Importing keeps each login in place — no re-sign-in.
+          </p>
+          <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+            {rows.map((r, i) => (
+              <div key={r.cand.data_dir} className="rounded-xl border border-slate-800 bg-slate-800/30 p-3">
+                <div className="flex items-center gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={r.selected}
+                    onChange={(e) => patch(i, { selected: e.target.checked })}
+                    className="h-4 w-4 shrink-0 accent-indigo-500"
+                  />
+                  <button
+                    onClick={() => cycleColor(i)}
+                    title="Change color"
+                    className="h-5 w-5 shrink-0 rounded-full ring-1 ring-white/10"
+                    style={{ backgroundColor: r.color }}
+                  />
+                  <input
+                    value={r.name}
+                    onChange={(e) => patch(i, { name: e.target.value })}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900/60 px-2 py-1 text-sm text-slate-100 outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <div className="mt-2 pl-[26px] text-xs">
+                  {r.cand.account?.email ? (
+                    <span className="text-slate-400">
+                      {r.cand.account.name && (
+                        <span className="text-slate-300">{r.cand.account.name} · </span>
+                      )}
+                      {r.cand.account.email}
+                      {r.cand.account.org && <span className="text-slate-500"> · {r.cand.account.org}</span>}
+                    </span>
+                  ) : (
+                    <span className="text-slate-500">{r.cand.signed_in ? "Signed in" : "Not signed in"}</span>
+                  )}
+                  <div className="mt-0.5 truncate text-[10px] text-slate-600">{r.cand.data_dir}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800">
+              Cancel
+            </button>
+            <button
+              disabled={busy || chosen === 0}
+              onClick={doImport}
+              className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
+            >
+              {busy ? "Importing…" : chosen > 0 ? `Import ${chosen}` : "Import"}
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 /* ------------------------------- app ------------------------------- */
 export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -312,6 +451,7 @@ export default function App() {
 
   const [editing, setEditing] = useState<Profile | "new" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [warn, setWarn] = useState<Profile | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<Profile | null>(null);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
@@ -469,12 +609,20 @@ export default function App() {
               <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
                 Each account gets its own isolated Claude window — separate login, history, and settings.
               </p>
-              <button
-                onClick={() => setEditing("new")}
-                className="mt-5 inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
-              >
-                <Icon.Plus className="h-4 w-4" /> New account
-              </button>
+              <div className="mt-5 flex items-center justify-center gap-3">
+                <button
+                  onClick={() => setEditing("new")}
+                  className="inline-flex items-center gap-2 rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
+                >
+                  <Icon.Plus className="h-4 w-4" /> New account
+                </button>
+                <button
+                  onClick={() => setImportOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-xl border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                >
+                  <Icon.Download className="h-4 w-4" /> Import existing
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -482,12 +630,20 @@ export default function App() {
                 <div className="text-sm text-slate-500">
                   {profiles.length} account{profiles.length === 1 ? "" : "s"}
                 </div>
-                <button
-                  onClick={() => setEditing("new")}
-                  className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
-                >
-                  <Icon.Plus className="h-4 w-4" /> New account
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setImportOpen(true)}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                  >
+                    <Icon.Download className="h-4 w-4" /> Import
+                  </button>
+                  <button
+                    onClick={() => setEditing("new")}
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-sm font-medium text-slate-200 hover:bg-slate-800"
+                  >
+                    <Icon.Plus className="h-4 w-4" /> New account
+                  </button>
+                </div>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 {profiles.map((p) => (
@@ -522,6 +678,14 @@ export default function App() {
       )}
       {settingsOpen && (
         <SettingsDialog claude={claude} onSaved={setClaude} onClose={() => setSettingsOpen(false)} />
+      )}
+      {importOpen && (
+        <ImportDialog
+          colorOffset={profiles.length}
+          onImported={setProfiles}
+          onError={setError}
+          onClose={() => setImportOpen(false)}
+        />
       )}
       {warn && (
         <Modal title="Heads up: first sign-in" onClose={() => setWarn(null)}>

@@ -247,3 +247,33 @@ fn extract_org(data: &[u8], person: Option<&str>) -> Option<String> {
     }
     None
 }
+
+/// Does this folder look like a Claude/Electron user-data directory?
+pub fn is_claude_data_dir(dir: &Path) -> bool {
+    dir.join("Local Storage").exists()
+        || dir.join("IndexedDB").exists()
+        || dir.join("Network").join("Cookies").exists()
+}
+
+/// Existing Claude data folders on this machine that could be adopted as
+/// profiles: the normal install (%APPDATA%\Claude) and any folders left by the
+/// old launcher (%APPDATA%\Claude-Profiles\*).
+pub fn candidate_data_dirs() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let base = Path::new(&appdata);
+        let default = base.join("Claude");
+        if is_claude_data_dir(&default) {
+            out.push(default);
+        }
+        if let Ok(entries) = fs::read_dir(base.join("Claude-Profiles")) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() && is_claude_data_dir(&p) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}

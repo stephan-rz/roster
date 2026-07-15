@@ -39,6 +39,14 @@ struct LaunchCheck {
     others_running: bool,
 }
 
+#[derive(serde::Serialize)]
+struct ImportCandidate {
+    data_dir: String,
+    suggested_name: String,
+    signed_in: bool,
+    account: Option<claude::Account>,
+}
+
 fn build_views(config: &Config, accounts: &HashMap<String, claude::Account>) -> Vec<ProfileView> {
     let running: Vec<String> = claude::running_data_dirs()
         .iter()
@@ -245,6 +253,75 @@ fn open_data_dir(state: State<AppState>, id: String) -> Result<(), String> {
     claude::open_in_explorer(&dir).map_err(|e| e.to_string())
 }
 
+/// Find existing Claude data folders that aren't already Roster profiles.
+#[tauri::command]
+fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
+    let existing: Vec<String> = {
+        let config = state.config.lock().unwrap();
+        config
+            .profiles
+            .iter()
+            .map(|p| claude::norm(&p.data_dir))
+            .collect()
+    };
+    let default_dir = std::env::var("APPDATA")
+        .map(|a| claude::norm(&format!("{}\\Claude", a)))
+        .unwrap_or_default();
+    claude::candidate_data_dirs()
+        .into_iter()
+        .filter_map(|p| {
+            let ds = p.to_string_lossy().to_string();
+            if existing.contains(&claude::norm(&ds)) {
+                return None;
+            }
+            let suggested_name = if claude::norm(&ds) == default_dir {
+                "Default".to_string()
+            } else {
+                p.file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Imported".to_string())
+            };
+            Some(ImportCandidate {
+                signed_in: claude::is_signed_in(&ds),
+                account: claude::read_account(&ds),
+                suggested_name,
+                data_dir: ds,
+            })
+        })
+        .collect()
+}
+
+/// Adopt an existing data folder as a profile (keeps its login in place).
+#[tauri::command]
+fn import_profile(
+    state: State<AppState>,
+    name: String,
+    color: String,
+    data_dir: String,
+) -> Result<Vec<ProfileView>, String> {
+    {
+        let mut config = state.config.lock().unwrap();
+        if config
+            .profiles
+            .iter()
+            .any(|p| claude::norm(&p.data_dir) == claude::norm(&data_dir))
+        {
+            return Err("That folder is already in Roster.".into());
+        }
+        config.profiles.push(Profile {
+            id: new_id(),
+            name: name.trim().to_string(),
+            color,
+            data_dir: data_dir.clone(),
+        });
+        save_config(&config).map_err(|e| e.to_string())?;
+    }
+    if let Some(acc) = claude::read_account(&data_dir) {
+        state.accounts.lock().unwrap().insert(data_dir, acc);
+    }
+    Ok(views(&state))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let config = load_config();
@@ -264,7 +341,9 @@ pub fn run() {
             refresh_accounts,
             claude_status,
             set_claude_path,
-            open_data_dir
+            open_data_dir,
+            discover_importable,
+            import_profile
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
