@@ -17,6 +17,9 @@ pub struct Profile {
     pub color: String,
     /// Absolute path passed to Claude as --user-data-dir.
     pub data_dir: String,
+    /// User-set subscription plan label (e.g. "Pro", "Max"); None if unset.
+    #[serde(default)]
+    pub plan: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

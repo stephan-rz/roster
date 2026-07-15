@@ -10,6 +10,7 @@ export interface Profile {
   id: string;
   name: string;
   color: string;
+  plan: string | null;
   data_dir: string;
   running: boolean;
   signed_in: boolean;
@@ -36,10 +37,10 @@ export interface ImportCandidate {
 export const api = {
   listProfiles: () => invoke<Profile[]>("list_profiles"),
   refreshAccounts: () => invoke<Profile[]>("refresh_accounts"),
-  addProfile: (name: string, color: string) =>
-    invoke<Profile[]>("add_profile", { name, color }),
-  updateProfile: (id: string, name: string, color: string) =>
-    invoke<Profile[]>("update_profile", { id, name, color }),
+  addProfile: (name: string, color: string, plan: string | null) =>
+    invoke<Profile[]>("add_profile", { name, color, plan }),
+  updateProfile: (id: string, name: string, color: string, plan: string | null) =>
+    invoke<Profile[]>("update_profile", { id, name, color, plan }),
   removeProfile: (id: string) => invoke<Profile[]>("remove_profile", { id }),
   preLaunchCheck: (id: string) => invoke<LaunchCheck>("pre_launch_check", { id }),
   launchProfile: (id: string) => invoke<void>("launch_profile", { id }),

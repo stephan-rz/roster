@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, PALETTE, type ClaudeStatus, type ImportCandidate, type Profile } from "./api";
 
+const PLANS = ["Free", "Pro", "Max", "Team", "Enterprise"];
+const PLAN_STYLES: Record<string, string> = {
+  Free: "bg-slate-700/50 text-slate-300",
+  Pro: "bg-violet-500/15 text-violet-300",
+  Max: "bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30",
+  Team: "bg-sky-500/15 text-sky-300",
+  Enterprise: "bg-emerald-500/15 text-emerald-300",
+};
+
 /* ------------------------------- icons ------------------------------- */
 const Icon = {
   Plus: (p: any) => (
@@ -117,8 +126,17 @@ function ProfileCard({
             </span>
             <div className="min-w-0">
               <div className="truncate font-semibold text-slate-100">{profile.name || "Untitled"}</div>
-              <div className="mt-0.5">
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
                 <Badge profile={profile} />
+                {profile.plan && (
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                      PLAN_STYLES[profile.plan] ?? "bg-slate-700/50 text-slate-300"
+                    }`}
+                  >
+                    {profile.plan}
+                  </span>
+                )}
               </div>
               {profile.account?.email && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
@@ -192,11 +210,12 @@ function EditDialog({
   onClose,
 }: {
   initial: Profile | null;
-  onSave: (name: string, color: string) => void;
+  onSave: (name: string, color: string, plan: string | null) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [color, setColor] = useState(initial?.color ?? PALETTE[0]);
+  const [plan, setPlan] = useState<string | null>(initial?.plan ?? null);
   const valid = name.trim().length > 0;
   return (
     <Modal title={initial ? "Edit account" : "New account"} onClose={onClose}>
@@ -205,7 +224,7 @@ function EditDialog({
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && valid && onSave(name, color)}
+        onKeyDown={(e) => e.key === "Enter" && valid && onSave(name.trim(), color, plan)}
         placeholder="Personal, Work, Client X…"
         className="mt-1.5 w-full rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500"
       />
@@ -224,13 +243,30 @@ function EditDialog({
         ))}
       </div>
 
+      <div className="mt-4 text-sm font-medium text-slate-300">
+        Plan <span className="font-normal text-slate-500">(optional)</span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {[null, ...PLANS].map((pl) => (
+          <button
+            key={pl ?? "none"}
+            onClick={() => setPlan(pl)}
+            className={`rounded-lg px-3 py-1 text-sm font-medium transition ${
+              plan === pl ? "bg-indigo-500 text-white" : "bg-slate-800/60 text-slate-300 hover:bg-slate-800"
+            }`}
+          >
+            {pl ?? "None"}
+          </button>
+        ))}
+      </div>
+
       <div className="mt-6 flex justify-end gap-2">
         <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800">
           Cancel
         </button>
         <button
           disabled={!valid}
-          onClick={() => onSave(name.trim(), color)}
+          onClick={() => onSave(name.trim(), color, plan)}
           className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
         >
           {initial ? "Save" : "Create"}
@@ -531,10 +567,10 @@ export default function App() {
     }
   }
 
-  async function onSave(name: string, color: string) {
+  async function onSave(name: string, color: string, plan: string | null) {
     try {
-      if (editing === "new") setProfiles(await api.addProfile(name, color));
-      else if (editing) setProfiles(await api.updateProfile(editing.id, name, color));
+      if (editing === "new") setProfiles(await api.addProfile(name, color, plan));
+      else if (editing) setProfiles(await api.updateProfile(editing.id, name, color, plan));
       setEditing(null);
     } catch (e) {
       setError(String(e));

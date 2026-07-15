@@ -21,6 +21,7 @@ pub struct ProfileView {
     id: String,
     name: String,
     color: String,
+    plan: Option<String>,
     data_dir: String,
     running: bool,
     signed_in: bool,
@@ -61,6 +62,7 @@ fn build_views(config: &Config, accounts: &HashMap<String, claude::Account>) -> 
                 id: p.id.clone(),
                 name: p.name.clone(),
                 color: p.color.clone(),
+                plan: p.plan.clone(),
                 data_dir: p.data_dir.clone(),
                 running: running.contains(&claude::norm(&p.data_dir)),
                 signed_in,
@@ -99,6 +101,7 @@ fn add_profile(
     state: State<AppState>,
     name: String,
     color: String,
+    plan: Option<String>,
 ) -> Result<Vec<ProfileView>, String> {
     {
         let mut config = state.config.lock().unwrap();
@@ -112,6 +115,7 @@ fn add_profile(
             name: name.trim().to_string(),
             color,
             data_dir,
+            plan,
         });
         save_config(&config).map_err(|e| e.to_string())?;
     }
@@ -124,12 +128,14 @@ fn update_profile(
     id: String,
     name: String,
     color: String,
+    plan: Option<String>,
 ) -> Result<Vec<ProfileView>, String> {
     {
         let mut config = state.config.lock().unwrap();
         if let Some(p) = config.profiles.iter_mut().find(|p| p.id == id) {
             p.name = name.trim().to_string();
             p.color = color;
+            p.plan = plan;
         }
         save_config(&config).map_err(|e| e.to_string())?;
     }
@@ -313,6 +319,7 @@ fn import_profile(
             name: name.trim().to_string(),
             color,
             data_dir: data_dir.clone(),
+            plan: None,
         });
         save_config(&config).map_err(|e| e.to_string())?;
     }
