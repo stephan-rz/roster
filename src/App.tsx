@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, PALETTE, type ClaudeStatus, type ImportCandidate, type Profile } from "./api";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 const REPO_URL = "https://github.com/stephan-rz/roster";
 const PLANS = ["Free", "Pro", "Max", "Team", "Enterprise"];
@@ -510,6 +512,8 @@ export default function App() {
   const [editing, setEditing] = useState<Profile | "new" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [updating, setUpdating] = useState(false);
   const [warn, setWarn] = useState<Profile | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<Profile | null>(null);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
@@ -548,6 +552,27 @@ export default function App() {
   useEffect(() => {
     refresh().then(refreshAccounts);
   }, [refresh, refreshAccounts]);
+
+  // Look for a newer release on launch (no-op offline or in dev).
+  useEffect(() => {
+    check()
+      .then(setUpdate)
+      .catch(() => {
+        /* ignore */
+      });
+  }, []);
+
+  async function installUpdate() {
+    if (!update) return;
+    setUpdating(true);
+    try {
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      setError(String(e));
+      setUpdating(false);
+    }
+  }
 
   useEffect(() => {
     const t = setInterval(refreshStatus, 4000);
@@ -647,6 +672,21 @@ export default function App() {
             </button>
           </div>
         </header>
+
+        {update && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-indigo-800 bg-indigo-950/40 px-4 py-3">
+            <span className="text-sm text-indigo-100">
+              Update available — <strong>v{update.version}</strong>
+            </span>
+            <button
+              onClick={installUpdate}
+              disabled={updating}
+              className="shrink-0 rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-400 disabled:opacity-50"
+            >
+              {updating ? "Installing…" : "Install & restart"}
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 rounded-xl border border-rose-900 bg-rose-950/50 px-4 py-3 text-sm text-rose-200">

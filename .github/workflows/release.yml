@@ -1,0 +1,50 @@
+name: Release
+
+# Push a version tag (e.g. `git tag v0.2.0 && git push --tags`) and this
+# builds, signs, publishes the release, and writes the updater manifest
+# (latest.json) that installed copies poll for auto-updates.
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update payload so the app only accepts releases from you.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Roster ${{ github.ref_name }}"
+          releaseBody: |
+            Download the `Roster_*_x64-setup.exe` asset below and run it.
+
+            Not code-signed yet — Windows SmartScreen may warn. Click **More info → Run anyway**.
+
+            Requires Claude Desktop. Unofficial — not affiliated with Anthropic.
+          releaseDraft: false
+          prerelease: false

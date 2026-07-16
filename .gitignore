@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Updater signing keys — never commit these
+*.key
+*.key.pub
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
