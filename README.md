@@ -4,6 +4,10 @@
 
 Claude Desktop has no account switcher — if you use a personal and a work account, you're stuck signing in and out. Roster runs each account in its own isolated window so you can use them at the same time.
 
+![Roster showing several Claude accounts side by side](docs/screenshot.png)
+
+<sub>Demo data pictured — no real accounts shown.</sub>
+
 > ⚠️ **Unofficial.** Roster is an independent tool and is **not affiliated with, endorsed by, or supported by Anthropic.** "Claude" is a trademark of Anthropic.
 
 ## Features

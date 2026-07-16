@@ -91,8 +91,49 @@ fn new_id() -> String {
     format!("p{}", nanos)
 }
 
+/// Demo mode (set ROSTER_DEMO=1) shows fake accounts — used for screenshots and
+/// trying the UI without touching real Claude data. Off by default.
+fn is_demo() -> bool {
+    std::env::var("ROSTER_DEMO").is_ok()
+}
+
+fn demo_views() -> Vec<ProfileView> {
+    let acc = |name: &str, email: &str, org: Option<&str>| {
+        Some(claude::Account {
+            email: Some(email.to_string()),
+            name: Some(name.to_string()),
+            org: org.map(|s| s.to_string()),
+        })
+    };
+    let v = |id: &str,
+             name: &str,
+             color: &str,
+             plan: &str,
+             running: bool,
+             signed_in: bool,
+             account: Option<claude::Account>| ProfileView {
+        id: id.to_string(),
+        name: name.to_string(),
+        color: color.to_string(),
+        plan: (!plan.is_empty()).then(|| plan.to_string()),
+        data_dir: String::new(),
+        running,
+        signed_in,
+        account,
+    };
+    vec![
+        v("1", "Personal", "#3B82F6", "Max", true, true, acc("Alex Rivers", "alex.rivers@gmail.com", None)),
+        v("2", "Work", "#EF4444", "Team", false, true, acc("Alex Rivers", "alex@acme.co", Some("Acme Inc"))),
+        v("3", "Client — Nova", "#8B5CF6", "Pro", false, true, acc("Jordan Lee", "jordan@novalabs.io", Some("Nova Labs"))),
+        v("4", "Sandbox", "#F59E0B", "Free", false, false, None),
+    ]
+}
+
 #[tauri::command]
 fn list_profiles(state: State<AppState>) -> Vec<ProfileView> {
+    if is_demo() {
+        return demo_views();
+    }
     views(&state)
 }
 
@@ -189,6 +230,9 @@ fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
 /// cache. Called by the UI on load and after a launch — not on every poll.
 #[tauri::command]
 fn refresh_accounts(state: State<AppState>) -> Vec<ProfileView> {
+    if is_demo() {
+        return demo_views();
+    }
     let dirs: Vec<String> = {
         let config = state.config.lock().unwrap();
         config
@@ -224,6 +268,12 @@ fn refresh_accounts(state: State<AppState>) -> Vec<ProfileView> {
 
 #[tauri::command]
 fn claude_status(state: State<AppState>) -> ClaudeStatus {
+    if is_demo() {
+        return ClaudeStatus {
+            found: true,
+            path: Some("Claude.exe".to_string()),
+        };
+    }
     let config = state.config.lock().unwrap();
     let detected = claude::detect_claude(&config.claude_path);
     ClaudeStatus {
