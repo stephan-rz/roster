@@ -135,6 +135,15 @@ pub fn open_in_explorer(path: &str) -> std::io::Result<()> {
     Command::new("explorer").arg(path).spawn().map(|_| ())
 }
 
+/// Open a URL (or file) with the OS default handler — e.g. a link in the browser.
+pub fn open_external(target: &str) -> std::io::Result<()> {
+    Command::new("cmd")
+        .args(["/c", "start", "", target])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .map(|_| ())
+}
+
 /// The signed-in account identity for a profile, read from Claude's cache.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Account {

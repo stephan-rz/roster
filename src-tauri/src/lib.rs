@@ -309,6 +309,16 @@ fn open_data_dir(state: State<AppState>, id: String) -> Result<(), String> {
     claude::open_in_explorer(&dir).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    claude::open_external(&url).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// Find existing Claude data folders that aren't already Roster profiles.
 #[tauri::command]
 fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
@@ -412,6 +422,8 @@ pub fn run() {
             claude_status,
             set_claude_path,
             open_data_dir,
+            open_url,
+            app_version,
             discover_importable,
             import_profile
         ])

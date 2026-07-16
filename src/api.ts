@@ -48,6 +48,8 @@ export const api = {
   setClaudePath: (path: string | null) =>
     invoke<ClaudeStatus>("set_claude_path", { path }),
   openDataDir: (id: string) => invoke<void>("open_data_dir", { id }),
+  openUrl: (url: string) => invoke<void>("open_url", { url }),
+  appVersion: () => invoke<string>("app_version"),
   discoverImportable: () => invoke<ImportCandidate[]>("discover_importable"),
   importProfile: (name: string, color: string, dataDir: string) =>
     invoke<Profile[]>("import_profile", { name, color, dataDir }),

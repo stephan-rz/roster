@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { api, PALETTE, type ClaudeStatus, type ImportCandidate, type Profile } from "./api";
 
+const REPO_URL = "https://github.com/stephan-rz/roster";
 const PLANS = ["Free", "Pro", "Max", "Team", "Enterprise"];
 const PLAN_STYLES: Record<string, string> = {
   Free: "bg-slate-700/50 text-slate-300",
@@ -53,6 +54,11 @@ const Icon = {
   Download: (p: any) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+    </svg>
+  ),
+  GitHub: (p: any) => (
+    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 1-.3 2-.4 3-.4s2 .1 3 .4c2.3-1.6 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.3 5.7.4.4.8 1.1.8 2.2v3.3c0 .3.2.7.8.6 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z" />
     </svg>
   ),
 };
@@ -288,6 +294,10 @@ function SettingsDialog({
 }) {
   const [path, setPath] = useState(claude.path ?? "");
   const [busy, setBusy] = useState(false);
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    api.appVersion().then(setVersion).catch(() => {});
+  }, []);
 
   async function save(next: string | null) {
     setBusy(true);
@@ -339,6 +349,18 @@ function SettingsDialog({
             Save
           </button>
         </div>
+      </div>
+
+      <div className="mt-5 flex items-center border-t border-slate-800 pt-3">
+        <button
+          onClick={() => api.openUrl(REPO_URL)}
+          title="View Roster on GitHub"
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-slate-400 transition hover:bg-slate-800 hover:text-slate-200"
+        >
+          <Icon.GitHub className="h-4 w-4" />
+          GitHub
+          {version && <span className="text-slate-500">v{version}</span>}
+        </button>
       </div>
     </Modal>
   );
