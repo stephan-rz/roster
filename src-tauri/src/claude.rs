@@ -123,12 +123,65 @@ pub fn running_data_dirs() -> Vec<String> {
 }
 
 /// Launch Claude with an isolated data directory. Returns the child pid.
-pub fn launch(exe: &Path, data_dir: &str) -> std::io::Result<u32> {
+/// Claude's app-activation ID. The publisher hash is fixed for Anthropic's
+/// package, so this stays constant across every Claude update — unlike the
+/// version-stamped .exe path.
+const CLAUDE_AUMID: &str = "Claude_pzs8sxrjxfjjc!Claude";
+
+/// Launch Claude with an isolated data dir.
+///
+/// The Store (MSIX) build can't be launched by its .exe path — Windows denies
+/// direct execution — so we activate it via its AppUserModelID (which also
+/// survives Claude's frequent self-updates). We fall back to spawning the exe
+/// directly for non-Store installs.
+pub fn launch(data_dir: &str, override_path: &Option<String>) -> Result<u32, String> {
     fs::create_dir_all(data_dir).ok();
-    let child = Command::new(exe)
+    let arg = format!("--user-data-dir=\"{}\"", data_dir);
+    if let Ok(pid) = launch_via_aumid(CLAUDE_AUMID, &arg) {
+        return Ok(pid);
+    }
+    let exe = detect_claude(override_path)
+        .ok_or_else(|| "Could not find or launch Claude. Set its location in Settings.".to_string())?;
+    let child = Command::new(&exe)
         .arg(format!("--user-data-dir={}", data_dir))
-        .spawn()?;
+        .spawn()
+        .map_err(|e| format!("Couldn't launch {}: {}", exe.display(), e))?;
     Ok(child.id())
+}
+
+/// Activate an MSIX app by AppUserModelID, passing command-line arguments.
+/// Runs on a dedicated STA thread so it never conflicts with the app's COM
+/// apartment.
+fn launch_via_aumid(aumid: &str, args: &str) -> Result<u32, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED,
+    };
+    use windows::Win32::UI::Shell::{
+        ApplicationActivationManager, IApplicationActivationManager, AO_NONE,
+    };
+
+    let aumid = aumid.to_string();
+    let args = args.to_string();
+    std::thread::spawn(move || -> Result<u32, String> {
+        let aumid_w: Vec<u16> = aumid.encode_utf16().chain(std::iter::once(0)).collect();
+        let args_w: Vec<u16> = args.encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            let result = (|| {
+                let manager: IApplicationActivationManager =
+                    CoCreateInstance(&ApplicationActivationManager, None, CLSCTX_ALL)
+                        .map_err(|e| e.to_string())?;
+                manager
+                    .ActivateApplication(PCWSTR(aumid_w.as_ptr()), PCWSTR(args_w.as_ptr()), AO_NONE)
+                    .map_err(|e| e.to_string())
+            })();
+            CoUninitialize();
+            result
+        }
+    })
+    .join()
+    .map_err(|_| "activation thread panicked".to_string())?
 }
 
 pub fn open_in_explorer(path: &str) -> std::io::Result<()> {

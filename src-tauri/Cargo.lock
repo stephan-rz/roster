@@ -2892,7 +2892,7 @@ dependencies = [
 
 [[package]]
 name = "roster"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -2903,6 +2903,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "windows 0.61.3",
 ]
 
 [[package]]

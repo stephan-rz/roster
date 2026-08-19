@@ -220,9 +220,7 @@ fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
             .ok_or("Profile not found")?;
         (p.data_dir.clone(), config.claude_path.clone())
     };
-    let exe = claude::detect_claude(&override_path)
-        .ok_or("Could not find Claude.exe. Set its location in Settings.")?;
-    claude::launch(&exe, &data_dir).map_err(|e| e.to_string())?;
+    claude::launch(&data_dir, &override_path)?;
     Ok(())
 }
 
