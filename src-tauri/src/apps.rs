@@ -395,6 +395,24 @@ pub fn running_data_dirs() -> HashMap<AppKind, Vec<String>> {
     out
 }
 
+/// Work out which app a data folder belongs to from the way it's laid out.
+///
+/// Claude keeps an Electron profile at the folder root; ChatGPT uses Chromium's
+/// multi-profile layout under `Default\`. Only the markers unique to one of
+/// them are consulted — `Local State` sits at the root of both, so it can't
+/// tell them apart. Anything ambiguous or empty falls back to Claude, which was
+/// the only supported app before this existed.
+pub fn sniff_data_dir(dir: &Path) -> AppKind {
+    let chatgpt = dir.join("Default").join("Local Storage").exists()
+        || dir.join("Default").join("Network").join("Cookies").exists();
+    let claude = dir.join("Local Storage").exists() || dir.join("IndexedDB").exists();
+    if chatgpt && !claude {
+        AppKind::ChatGpt
+    } else {
+        AppKind::Claude
+    }
+}
+
 /// Sits far above a fresh profile's noise floor (~60 bytes, measured) and far
 /// below a real signed-in session (megabytes).
 const SIGNED_IN_MIN_BYTES: u64 = 64 * 1024;

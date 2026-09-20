@@ -63,14 +63,14 @@ fn build_views(config: &Config, accounts: &HashMap<String, Account>) -> Vec<Prof
         .profiles
         .iter()
         .map(|p| {
-            let signed_in = p.app.is_signed_in(&p.data_dir);
-            let live = running.get(&p.app).unwrap_or(&empty);
+            let signed_in = p.app().is_signed_in(&p.data_dir);
+            let live = running.get(&p.app()).unwrap_or(&empty);
             ProfileView {
                 id: p.id.clone(),
                 name: p.name.clone(),
                 color: p.color.clone(),
                 plan: p.plan.clone(),
-                app: p.app,
+                app: p.app(),
                 data_dir: p.data_dir.clone(),
                 running: live.contains(&sys::norm(&p.data_dir)),
                 signed_in,
@@ -171,7 +171,7 @@ fn add_profile(
             color,
             data_dir,
             plan,
-            app,
+            app: Some(app),
         });
         save_config(&config).map_err(|e| e.to_string())?;
     }
@@ -220,7 +220,7 @@ fn pre_launch_check(state: State<AppState>, id: String) -> LaunchCheck {
             .map(|p| apps::dir_is_empty_or_missing(&p.data_dir))
             .unwrap_or(false),
         // Only the same app's windows can steal a sign-in.
-        others_running: profile.map(|p| p.app.any_running()).unwrap_or(false),
+        others_running: profile.map(|p| p.app().any_running()).unwrap_or(false),
     }
 }
 
@@ -233,7 +233,7 @@ fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
             .iter()
             .find(|p| p.id == id)
             .ok_or("Profile not found")?;
-        (p.app, p.data_dir.clone(), config.path_for(p.app).clone())
+        (p.app(), p.data_dir.clone(), config.path_for(p.app()).clone())
     };
     app.launch(&data_dir, &override_path)?;
     Ok(())
@@ -251,8 +251,8 @@ fn refresh_accounts(state: State<AppState>) -> Vec<ProfileView> {
         config
             .profiles
             .iter()
-            .filter(|p| p.app.is_signed_in(&p.data_dir))
-            .map(|p| (p.app, p.data_dir.clone()))
+            .filter(|p| p.app().is_signed_in(&p.data_dir))
+            .map(|p| (p.app(), p.data_dir.clone()))
             .collect()
     };
     // Do the (potentially slow) storage reads without holding any lock.
@@ -405,7 +405,7 @@ fn import_profile(
             color,
             data_dir: data_dir.clone(),
             plan: None,
-            app,
+            app: Some(app),
         });
         save_config(&config).map_err(|e| e.to_string())?;
     }

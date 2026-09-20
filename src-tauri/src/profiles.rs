@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::apps::AppKind;
 
@@ -22,10 +22,21 @@ pub struct Profile {
     /// User-set subscription plan label (e.g. "Pro", "Max"); None if unset.
     #[serde(default)]
     pub plan: Option<String>,
-    /// Which app this profile launches. Defaults to Claude so configs written
-    /// before ChatGPT support load unchanged.
+    /// Which app this profile launches.
+    ///
+    /// `None` means the field was absent on disk: either a config written
+    /// before ChatGPT support, or one that an older build re-saved — versions
+    /// before 0.2.3 don't know the field and silently drop it. Either way it's
+    /// recovered at load time by looking at the data folder, which is far safer
+    /// than assuming Claude and quietly relabelling someone's ChatGPT accounts.
     #[serde(default)]
-    pub app: AppKind,
+    pub app: Option<AppKind>,
+}
+
+impl Profile {
+    pub fn app(&self) -> AppKind {
+        self.app.unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -71,10 +82,30 @@ fn config_path() -> PathBuf {
 }
 
 pub fn load_config() -> Config {
-    match fs::read_to_string(config_path()) {
+    let mut config: Config = match fs::read_to_string(config_path()) {
         Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
         Err(_) => Config::default(),
+    };
+    if backfill_apps(&mut config) {
+        let _ = save_config(&config);
     }
+    config
+}
+
+/// Work out which app each profile belongs to when the config doesn't say,
+/// and write the answer back. Returns whether anything changed.
+///
+/// Claude and ChatGPT lay their profile folders out differently, so the folder
+/// itself is a reliable witness — see [`crate::apps::sniff_data_dir`].
+fn backfill_apps(config: &mut Config) -> bool {
+    let mut changed = false;
+    for p in config.profiles.iter_mut() {
+        if p.app.is_none() {
+            p.app = Some(crate::apps::sniff_data_dir(Path::new(&p.data_dir)));
+            changed = true;
+        }
+    }
+    changed
 }
 
 pub fn save_config(config: &Config) -> std::io::Result<()> {
