@@ -1,6 +1,9 @@
+mod apps;
 mod claude;
 mod profiles;
+mod sys;
 
+use apps::{Account, AppKind};
 use profiles::{load_config, save_config, Config, Profile};
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -12,7 +15,7 @@ pub struct AppState {
     /// Cache of resolved account identities, keyed by data dir. Populated by
     /// `refresh_accounts` (which does the IO) so the frequent status poll stays
     /// cheap.
-    accounts: Mutex<HashMap<String, claude::Account>>,
+    accounts: Mutex<HashMap<String, Account>>,
 }
 
 /// A profile plus its live status and (if known) signed-in account, for the UI.
@@ -22,14 +25,18 @@ pub struct ProfileView {
     name: String,
     color: String,
     plan: Option<String>,
+    app: AppKind,
     data_dir: String,
     running: bool,
     signed_in: bool,
-    account: Option<claude::Account>,
+    account: Option<Account>,
 }
 
+/// Whether one app was found on this machine, and where.
 #[derive(serde::Serialize)]
-struct ClaudeStatus {
+struct AppStatus {
+    app: AppKind,
+    label: String,
     found: bool,
     path: Option<String>,
 }
@@ -44,27 +51,28 @@ struct LaunchCheck {
 struct ImportCandidate {
     data_dir: String,
     suggested_name: String,
+    app: AppKind,
     signed_in: bool,
-    account: Option<claude::Account>,
+    account: Option<Account>,
 }
 
-fn build_views(config: &Config, accounts: &HashMap<String, claude::Account>) -> Vec<ProfileView> {
-    let running: Vec<String> = claude::running_data_dirs()
-        .iter()
-        .map(|d| claude::norm(d))
-        .collect();
+fn build_views(config: &Config, accounts: &HashMap<String, Account>) -> Vec<ProfileView> {
+    let running = apps::running_data_dirs();
+    let empty: Vec<String> = Vec::new();
     config
         .profiles
         .iter()
         .map(|p| {
-            let signed_in = claude::is_signed_in(&p.data_dir);
+            let signed_in = p.app.is_signed_in(&p.data_dir);
+            let live = running.get(&p.app).unwrap_or(&empty);
             ProfileView {
                 id: p.id.clone(),
                 name: p.name.clone(),
                 color: p.color.clone(),
                 plan: p.plan.clone(),
+                app: p.app,
                 data_dir: p.data_dir.clone(),
-                running: running.contains(&claude::norm(&p.data_dir)),
+                running: live.contains(&sys::norm(&p.data_dir)),
                 signed_in,
                 account: if signed_in {
                     accounts.get(&p.data_dir).cloned()
@@ -92,40 +100,45 @@ fn new_id() -> String {
 }
 
 /// Demo mode (set ROSTER_DEMO=1) shows fake accounts — used for screenshots and
-/// trying the UI without touching real Claude data. Off by default.
+/// trying the UI without touching real app data. Off by default.
 fn is_demo() -> bool {
     std::env::var("ROSTER_DEMO").is_ok()
 }
 
 fn demo_views() -> Vec<ProfileView> {
     let acc = |name: &str, email: &str, org: Option<&str>| {
-        Some(claude::Account {
+        Some(Account {
             email: Some(email.to_string()),
             name: Some(name.to_string()),
             org: org.map(|s| s.to_string()),
         })
     };
+    #[allow(clippy::too_many_arguments)]
     let v = |id: &str,
              name: &str,
              color: &str,
              plan: &str,
+             app: AppKind,
              running: bool,
              signed_in: bool,
-             account: Option<claude::Account>| ProfileView {
+             account: Option<Account>| ProfileView {
         id: id.to_string(),
         name: name.to_string(),
         color: color.to_string(),
         plan: (!plan.is_empty()).then(|| plan.to_string()),
+        app,
         data_dir: String::new(),
         running,
         signed_in,
         account,
     };
     vec![
-        v("1", "Personal", "#3B82F6", "Max", true, true, acc("Alex Rivers", "alex.rivers@gmail.com", None)),
-        v("2", "Work", "#EF4444", "Team", false, true, acc("Alex Rivers", "alex@acme.co", Some("Acme Inc"))),
-        v("3", "Client — Nova", "#8B5CF6", "Pro", false, true, acc("Jordan Lee", "jordan@novalabs.io", Some("Nova Labs"))),
-        v("4", "Sandbox", "#F59E0B", "Free", false, false, None),
+        v("1", "Personal", "#3B82F6", "Max", AppKind::Claude, true, true,
+          acc("Alex Rivers", "alex.rivers@gmail.com", None)),
+        v("2", "Work", "#EF4444", "Team", AppKind::Claude, false, true,
+          acc("Alex Rivers", "alex@acme.co", Some("Acme Inc"))),
+        v("3", "Personal", "#10B981", "Plus", AppKind::ChatGpt, true, true, None),
+        v("4", "Client — Nova", "#8B5CF6", "Business", AppKind::ChatGpt, false, false, None),
     ]
 }
 
@@ -143,6 +156,7 @@ fn add_profile(
     name: String,
     color: String,
     plan: Option<String>,
+    app: AppKind,
 ) -> Result<Vec<ProfileView>, String> {
     {
         let mut config = state.config.lock().unwrap();
@@ -157,12 +171,15 @@ fn add_profile(
             color,
             data_dir,
             plan,
+            app,
         });
         save_config(&config).map_err(|e| e.to_string())?;
     }
     Ok(views(&state))
 }
 
+/// The app a profile launches is fixed at creation — its data folder is laid
+/// out for that app — so only the cosmetic fields are editable.
 #[tauri::command]
 fn update_profile(
     state: State<AppState>,
@@ -197,30 +214,28 @@ fn remove_profile(state: State<AppState>, id: String) -> Result<Vec<ProfileView>
 #[tauri::command]
 fn pre_launch_check(state: State<AppState>, id: String) -> LaunchCheck {
     let config = state.config.lock().unwrap();
-    let first_run = config
-        .profiles
-        .iter()
-        .find(|p| p.id == id)
-        .map(|p| claude::dir_is_empty_or_missing(&p.data_dir))
-        .unwrap_or(false);
+    let profile = config.profiles.iter().find(|p| p.id == id);
     LaunchCheck {
-        first_run,
-        others_running: claude::any_claude_running(),
+        first_run: profile
+            .map(|p| apps::dir_is_empty_or_missing(&p.data_dir))
+            .unwrap_or(false),
+        // Only the same app's windows can steal a sign-in.
+        others_running: profile.map(|p| p.app.any_running()).unwrap_or(false),
     }
 }
 
 #[tauri::command]
 fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
-    let (data_dir, override_path) = {
+    let (app, data_dir, override_path) = {
         let config = state.config.lock().unwrap();
         let p = config
             .profiles
             .iter()
             .find(|p| p.id == id)
             .ok_or("Profile not found")?;
-        (p.data_dir.clone(), config.claude_path.clone())
+        (p.app, p.data_dir.clone(), config.path_for(p.app).clone())
     };
-    claude::launch(&data_dir, &override_path)?;
+    app.launch(&data_dir, &override_path)?;
     Ok(())
 }
 
@@ -231,21 +246,21 @@ fn refresh_accounts(state: State<AppState>) -> Vec<ProfileView> {
     if is_demo() {
         return demo_views();
     }
-    let dirs: Vec<String> = {
+    let targets: Vec<(AppKind, String)> = {
         let config = state.config.lock().unwrap();
         config
             .profiles
             .iter()
-            .filter(|p| claude::is_signed_in(&p.data_dir))
-            .map(|p| p.data_dir.clone())
+            .filter(|p| p.app.is_signed_in(&p.data_dir))
+            .map(|p| (p.app, p.data_dir.clone()))
             .collect()
     };
-    // Do the (potentially slow) IndexedDB reads without holding any lock.
-    let found: Vec<(String, Option<claude::Account>)> = dirs
+    // Do the (potentially slow) storage reads without holding any lock.
+    let found: Vec<(String, Option<Account>)> = targets
         .into_iter()
-        .map(|d| {
-            let a = claude::read_account(&d);
-            (d, a)
+        .map(|(app, dir)| {
+            let a = app.read_account(&dir);
+            (dir, a)
         })
         .collect();
     {
@@ -265,31 +280,45 @@ fn refresh_accounts(state: State<AppState>) -> Vec<ProfileView> {
 }
 
 #[tauri::command]
-fn claude_status(state: State<AppState>) -> ClaudeStatus {
+fn app_statuses(state: State<AppState>) -> Vec<AppStatus> {
     if is_demo() {
-        return ClaudeStatus {
-            found: true,
-            path: Some("Claude.exe".to_string()),
-        };
+        return AppKind::ALL
+            .into_iter()
+            .map(|app| AppStatus {
+                app,
+                label: app.label().to_string(),
+                found: true,
+                path: Some(app.exe_name().to_string()),
+            })
+            .collect();
     }
     let config = state.config.lock().unwrap();
-    let detected = claude::detect_claude(&config.claude_path);
-    ClaudeStatus {
-        found: detected.is_some(),
-        path: detected.map(|p| p.to_string_lossy().to_string()),
-    }
+    AppKind::ALL
+        .into_iter()
+        .map(|app| {
+            let detected = app.detect_exe(config.path_for(app));
+            AppStatus {
+                app,
+                label: app.label().to_string(),
+                found: detected.is_some(),
+                path: detected.map(|p| p.to_string_lossy().to_string()),
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
-fn set_claude_path(state: State<AppState>, path: Option<String>) -> Result<ClaudeStatus, String> {
-    let mut config = state.config.lock().unwrap();
-    config.claude_path = path.filter(|s| !s.trim().is_empty());
-    save_config(&config).map_err(|e| e.to_string())?;
-    let detected = claude::detect_claude(&config.claude_path);
-    Ok(ClaudeStatus {
-        found: detected.is_some(),
-        path: detected.map(|p| p.to_string_lossy().to_string()),
-    })
+fn set_app_path(
+    state: State<AppState>,
+    app: AppKind,
+    path: Option<String>,
+) -> Result<Vec<AppStatus>, String> {
+    {
+        let mut config = state.config.lock().unwrap();
+        config.set_path_for(app, path);
+        save_config(&config).map_err(|e| e.to_string())?;
+    }
+    Ok(app_statuses(state))
 }
 
 #[tauri::command]
@@ -304,12 +333,12 @@ fn open_data_dir(state: State<AppState>, id: String) -> Result<(), String> {
             .ok_or("Profile not found")?
     };
     std::fs::create_dir_all(&dir).ok();
-    claude::open_in_explorer(&dir).map_err(|e| e.to_string())
+    sys::open_in_explorer(&dir).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
-    claude::open_external(&url).map_err(|e| e.to_string())
+    sys::open_external(&url).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -317,7 +346,8 @@ fn app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
-/// Find existing Claude data folders that aren't already Roster profiles.
+/// Find existing data folders — for any supported app — that aren't already
+/// Roster profiles.
 #[tauri::command]
 fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
     let existing: Vec<String> = {
@@ -325,33 +355,26 @@ fn discover_importable(state: State<AppState>) -> Vec<ImportCandidate> {
         config
             .profiles
             .iter()
-            .map(|p| claude::norm(&p.data_dir))
+            .map(|p| sys::norm(&p.data_dir))
             .collect()
     };
-    claude::candidate_data_dirs()
+    AppKind::ALL
         .into_iter()
-        .filter_map(|p| {
+        .flat_map(|app| {
+            app.candidate_data_dirs()
+                .into_iter()
+                .map(move |p| (app, p))
+        })
+        .filter_map(|(app, p)| {
             let ds = p.to_string_lossy().to_string();
-            if existing.contains(&claude::norm(&ds)) {
+            if existing.contains(&sys::norm(&ds)) {
                 return None;
             }
-            // Every "default" location ends in \Claude; old-launcher profiles
-            // end in the profile name (\Work, …).
-            let base = p
-                .file_name()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_default();
-            let suggested_name = if base.eq_ignore_ascii_case("Claude") {
-                "Personal".to_string()
-            } else if base.is_empty() {
-                "Imported".to_string()
-            } else {
-                base
-            };
             Some(ImportCandidate {
-                signed_in: claude::is_signed_in(&ds),
-                account: claude::read_account(&ds),
-                suggested_name,
+                suggested_name: app.suggested_name(&p),
+                signed_in: app.is_signed_in(&ds),
+                account: app.read_account(&ds),
+                app,
                 data_dir: ds,
             })
         })
@@ -365,13 +388,14 @@ fn import_profile(
     name: String,
     color: String,
     data_dir: String,
+    app: AppKind,
 ) -> Result<Vec<ProfileView>, String> {
     {
         let mut config = state.config.lock().unwrap();
         if config
             .profiles
             .iter()
-            .any(|p| claude::norm(&p.data_dir) == claude::norm(&data_dir))
+            .any(|p| sys::norm(&p.data_dir) == sys::norm(&data_dir))
         {
             return Err("That folder is already in Roster.".into());
         }
@@ -381,10 +405,11 @@ fn import_profile(
             color,
             data_dir: data_dir.clone(),
             plan: None,
+            app,
         });
         save_config(&config).map_err(|e| e.to_string())?;
     }
-    if let Some(acc) = claude::read_account(&data_dir) {
+    if let Some(acc) = app.read_account(&data_dir) {
         state.accounts.lock().unwrap().insert(data_dir, acc);
     }
     Ok(views(&state))
@@ -419,8 +444,8 @@ pub fn run() {
             pre_launch_check,
             launch_profile,
             refresh_accounts,
-            claude_status,
-            set_claude_path,
+            app_statuses,
+            set_app_path,
             open_data_dir,
             open_url,
             app_version,

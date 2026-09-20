@@ -1,15 +1,26 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, PALETTE, type ClaudeStatus, type ImportCandidate, type Profile } from "./api";
+import {
+  api,
+  APP_META,
+  APP_ORDER,
+  PALETTE,
+  type AppKind,
+  type AppStatus,
+  type ImportCandidate,
+  type Profile,
+} from "./api";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 const REPO_URL = "https://github.com/stephan-rz/roster";
-const PLANS = ["Free", "Pro", "Max", "Team", "Enterprise"];
 const PLAN_STYLES: Record<string, string> = {
   Free: "bg-slate-700/50 text-slate-300",
+  Go: "bg-cyan-500/15 text-cyan-300",
+  Plus: "bg-violet-500/15 text-violet-300",
   Pro: "bg-violet-500/15 text-violet-300",
   Max: "bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-500/30",
   Team: "bg-sky-500/15 text-sky-300",
+  Business: "bg-sky-500/15 text-sky-300",
   Enterprise: "bg-emerald-500/15 text-emerald-300",
 };
 
@@ -80,6 +91,17 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
         <div className="px-5 py-4">{children}</div>
       </div>
     </div>
+  );
+}
+
+/* ------------------------------- app chip ------------------------------- */
+function AppChip({ app, className = "" }: { app: AppKind; className?: string }) {
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold ${APP_META[app].chip} ${className}`}
+    >
+      {APP_META[app].label}
+    </span>
   );
 }
 
@@ -218,21 +240,59 @@ function EditDialog({
   onClose,
 }: {
   initial: Profile | null;
-  onSave: (name: string, color: string, plan: string | null) => void;
+  onSave: (name: string, color: string, plan: string | null, app: AppKind) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [color, setColor] = useState(initial?.color ?? PALETTE[0]);
   const [plan, setPlan] = useState<string | null>(initial?.plan ?? null);
+  const [app, setApp] = useState<AppKind>(initial?.app ?? "claude");
   const valid = name.trim().length > 0;
+  const submit = () => onSave(name.trim(), color, plan, app);
+
+  // Plans differ per app, so drop a selection that doesn't exist for the new one.
+  function pickApp(next: AppKind) {
+    setApp(next);
+    if (plan && !APP_META[next].plans.includes(plan)) setPlan(null);
+  }
+
   return (
     <Modal title={initial ? "Edit account" : "New account"} onClose={onClose}>
-      <label className="block text-sm font-medium text-slate-300">Name</label>
+      <div className="text-sm font-medium text-slate-300">App</div>
+      {initial ? (
+        <div className="mt-2 flex items-center gap-2">
+          <AppChip app={initial.app} />
+          <span className="text-xs text-slate-500">
+            Can't be changed — the data folder is set up for {APP_META[initial.app].label}.
+          </span>
+        </div>
+      ) : (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          {APP_ORDER.map((k) => (
+            <button
+              key={k}
+              onClick={() => pickApp(k)}
+              className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                app === k
+                  ? "border-indigo-500 bg-indigo-500/10 text-slate-100"
+                  : "border-slate-700 bg-slate-800/40 text-slate-400 hover:bg-slate-800"
+              }`}
+            >
+              <span className="flex items-center justify-center gap-2">
+                <span className={`h-2 w-2 rounded-full ${APP_META[k].dot}`} />
+                {APP_META[k].label}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <label className="mt-4 block text-sm font-medium text-slate-300">Name</label>
       <input
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && valid && onSave(name.trim(), color, plan)}
+        onKeyDown={(e) => e.key === "Enter" && valid && submit()}
         placeholder="Personal, Work, Client X…"
         className="mt-1.5 w-full rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500"
       />
@@ -255,7 +315,7 @@ function EditDialog({
         Plan <span className="font-normal text-slate-500">(optional)</span>
       </div>
       <div className="mt-2 flex flex-wrap gap-2">
-        {[null, ...PLANS].map((pl) => (
+        {[null, ...APP_META[app].plans].map((pl) => (
           <button
             key={pl ?? "none"}
             onClick={() => setPlan(pl)}
@@ -274,7 +334,7 @@ function EditDialog({
         </button>
         <button
           disabled={!valid}
-          onClick={() => onSave(name.trim(), color, plan)}
+          onClick={submit}
           className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
         >
           {initial ? "Save" : "Create"}
@@ -285,72 +345,99 @@ function EditDialog({
 }
 
 /* ------------------------------- settings dialog ------------------------------- */
-function SettingsDialog({
-  claude,
+function AppPathRow({
+  status,
   onSaved,
-  onClose,
 }: {
-  claude: ClaudeStatus;
-  onSaved: (s: ClaudeStatus) => void;
-  onClose: () => void;
+  status: AppStatus;
+  onSaved: (s: AppStatus[]) => void;
 }) {
-  const [path, setPath] = useState(claude.path ?? "");
+  const meta = APP_META[status.app];
+  const [path, setPath] = useState(status.path ?? "");
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState("");
-  useEffect(() => {
-    api.appVersion().then(setVersion).catch(() => {});
-  }, []);
 
   async function save(next: string | null) {
     setBusy(true);
     try {
-      onSaved(await api.setClaudePath(next));
+      onSaved(await api.setAppPath(status.app, next));
+      if (next === null) setPath("");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Modal title="Settings" onClose={onClose}>
-      <div className="text-sm font-medium text-slate-300">Claude.exe location</div>
-      <p className="mt-1 text-xs text-slate-500">
-        Roster finds Claude automatically. Only set this if detection fails (it re-detects on every launch, so it
-        survives Claude updates).
-      </p>
+    <div className="rounded-xl border border-slate-800 bg-slate-800/20 p-3">
+      <div className="flex items-center gap-2">
+        <AppChip app={status.app} />
+        <span className="text-sm font-medium text-slate-300">{meta.exe} location</span>
+      </div>
       <div
-        className={`mt-3 rounded-xl border px-3 py-2 text-xs ${
-          claude.found ? "border-emerald-800 bg-emerald-500/10 text-emerald-300" : "border-amber-800 bg-amber-500/10 text-amber-300"
+        className={`mt-2 rounded-lg border px-3 py-2 text-xs ${
+          status.found
+            ? "border-emerald-800 bg-emerald-500/10 text-emerald-300"
+            : "border-amber-800 bg-amber-500/10 text-amber-300"
         }`}
       >
-        {claude.found ? `Detected: ${claude.path}` : "Claude.exe not found automatically."}
+        {status.found ? `Detected: ${status.path}` : `${meta.exe} not found automatically.`}
       </div>
-
       <input
         value={path}
         onChange={(e) => setPath(e.target.value)}
-        placeholder="C:\\…\\Claude.exe"
-        className="mt-3 w-full rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500"
+        placeholder={`C:\\…\\${meta.exe}`}
+        className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500"
       />
-      <div className="mt-4 flex justify-between">
+      <div className="mt-2 flex justify-end gap-2">
         <button
           onClick={() => save(null)}
           disabled={busy}
-          className="rounded-xl px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          className="rounded-lg px-3 py-1.5 text-xs font-medium text-slate-400 hover:bg-slate-800 disabled:opacity-50"
         >
           Reset to auto
         </button>
-        <div className="flex gap-2">
-          <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800">
-            Close
-          </button>
-          <button
-            onClick={() => save(path)}
-            disabled={busy}
-            className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
-          >
-            Save
-          </button>
-        </div>
+        <button
+          onClick={() => save(path)}
+          disabled={busy}
+          className="rounded-lg bg-indigo-500 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SettingsDialog({
+  statuses,
+  onSaved,
+  onClose,
+}: {
+  statuses: AppStatus[];
+  onSaved: (s: AppStatus[]) => void;
+  onClose: () => void;
+}) {
+  const [version, setVersion] = useState("");
+  useEffect(() => {
+    api.appVersion().then(setVersion).catch(() => {});
+  }, []);
+
+  return (
+    <Modal title="Settings" onClose={onClose}>
+      <p className="text-xs text-slate-500">
+        Roster finds each app automatically and re-detects on every launch, so it survives their updates. Only set a
+        path here if detection fails.
+      </p>
+
+      <div className="mt-3 space-y-3">
+        {statuses.map((s) => (
+          <AppPathRow key={s.app} status={s} onSaved={onSaved} />
+        ))}
+      </div>
+
+      <div className="mt-4 flex justify-end">
+        <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800">
+          Close
+        </button>
       </div>
 
       <div className="mt-5 flex items-center border-t border-slate-800 pt-3">
@@ -390,12 +477,14 @@ function ImportDialog({
       .discoverImportable()
       .then((cands) =>
         setRows(
-          cands.map((c, i) => ({
-            cand: c,
-            selected: true,
-            name: c.suggested_name,
-            color: PALETTE[(colorOffset + i) % PALETTE.length],
-          })),
+          [...cands]
+            .sort((a, b) => APP_ORDER.indexOf(a.app) - APP_ORDER.indexOf(b.app))
+            .map((c, i) => ({
+              cand: c,
+              selected: true,
+              name: c.suggested_name,
+              color: PALETTE[(colorOffset + i) % PALETTE.length],
+            })),
         ),
       )
       .catch(() => setRows([]));
@@ -421,7 +510,7 @@ function ImportDialog({
     let latest: Profile[] | null = null;
     try {
       for (const r of rows.filter((r) => r.selected && r.name.trim())) {
-        latest = await api.importProfile(r.name.trim(), r.color, r.cand.data_dir);
+        latest = await api.importProfile(r.name.trim(), r.color, r.cand.data_dir, r.cand.app);
       }
       if (latest) onImported(latest);
       onClose();
@@ -435,10 +524,12 @@ function ImportDialog({
   return (
     <Modal title="Import existing accounts" onClose={onClose}>
       {rows === null ? (
-        <div className="py-8 text-center text-sm text-slate-500">Scanning for Claude folders…</div>
+        <div className="py-8 text-center text-sm text-slate-500">
+          Scanning for Claude and ChatGPT folders…
+        </div>
       ) : rows.length === 0 ? (
         <div className="py-8 text-center text-sm text-slate-500">
-          No existing Claude folders found to import.
+          No existing Claude or ChatGPT folders found to import.
         </div>
       ) : (
         <>
@@ -466,6 +557,7 @@ function ImportDialog({
                     onChange={(e) => patch(i, { name: e.target.value })}
                     className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-900/60 px-2 py-1 text-sm text-slate-100 outline-none focus:border-indigo-500"
                   />
+                  <AppChip app={r.cand.app} className="shrink-0" />
                 </div>
                 <div className="mt-2 pl-[26px] text-xs">
                   {r.cand.account?.email ? (
@@ -505,7 +597,7 @@ function ImportDialog({
 /* ------------------------------- app ------------------------------- */
 export default function App() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [claude, setClaude] = useState<ClaudeStatus>({ found: false, path: null });
+  const [statuses, setStatuses] = useState<AppStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -520,9 +612,9 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [ps, cs] = await Promise.all([api.listProfiles(), api.claudeStatus()]);
+      const [ps, st] = await Promise.all([api.listProfiles(), api.appStatuses()]);
       setProfiles(ps);
-      setClaude(cs);
+      setStatuses(st);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -614,9 +706,9 @@ export default function App() {
     }
   }
 
-  async function onSave(name: string, color: string, plan: string | null) {
+  async function onSave(name: string, color: string, plan: string | null, app: AppKind) {
     try {
-      if (editing === "new") setProfiles(await api.addProfile(name, color, plan));
+      if (editing === "new") setProfiles(await api.addProfile(name, color, plan, app));
       else if (editing) setProfiles(await api.updateProfile(editing.id, name, color, plan));
       setEditing(null);
     } catch (e) {
@@ -634,6 +726,12 @@ export default function App() {
     }
   }
 
+  // Cards are grouped per app, so a mixed roster stays readable at a glance.
+  const groups = APP_ORDER.map((app) => ({
+    app,
+    items: profiles.filter((p) => p.app === app),
+  })).filter((g) => g.items.length > 0);
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-950 to-slate-900 text-slate-200">
       <div className="mx-auto flex min-h-screen max-w-3xl flex-col px-6">
@@ -650,19 +748,22 @@ export default function App() {
                   Unofficial
                 </span>
               </div>
-              <p className="text-xs text-slate-500">Multiple Claude accounts, side by side</p>
+              <p className="text-xs text-slate-500">Multiple Claude and ChatGPT accounts, side by side</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <span
-              className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium sm:inline-flex ${
-                claude.found ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-300"
-              }`}
-              title={claude.path ?? undefined}
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${claude.found ? "bg-emerald-400" : "bg-amber-400"}`} />
-              {claude.found ? "Claude detected" : "Claude not found"}
-            </span>
+            {statuses.map((s) => (
+              <span
+                key={s.app}
+                className={`hidden items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium sm:inline-flex ${
+                  s.found ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-700/40 text-slate-500"
+                }`}
+                title={s.path ?? `${s.label} not found on this PC`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${s.found ? "bg-emerald-400" : "bg-slate-600"}`} />
+                {s.label}
+              </span>
+            ))}
             <button
               title="Settings"
               onClick={() => setSettingsOpen(true)}
@@ -705,7 +806,7 @@ export default function App() {
               </div>
               <h2 className="mt-4 text-base font-semibold text-slate-200">Add your first account</h2>
               <p className="mx-auto mt-1 max-w-sm text-sm text-slate-500">
-                Each account gets its own isolated Claude window — separate login, history, and settings.
+                Each account gets its own isolated Claude or ChatGPT window — separate login, history, and settings.
               </p>
               <div className="mt-5 flex items-center justify-center gap-3">
                 <button
@@ -743,17 +844,29 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {profiles.map((p) => (
-                  <ProfileCard
-                    key={p.id}
-                    profile={p}
-                    launching={launchingId === p.id}
-                    onLaunch={() => onLaunch(p)}
-                    onEdit={() => setEditing(p)}
-                    onFolder={() => api.openDataDir(p.id).catch((e) => setError(String(e)))}
-                    onRemove={() => setConfirmRemove(p)}
-                  />
+              <div className="space-y-5">
+                {groups.map((g) => (
+                  <section key={g.app}>
+                    <div className="mb-2 flex items-center gap-2">
+                      <AppChip app={g.app} />
+                      <span className="text-xs text-slate-600">
+                        {g.items.length} account{g.items.length === 1 ? "" : "s"}
+                      </span>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {g.items.map((p) => (
+                        <ProfileCard
+                          key={p.id}
+                          profile={p}
+                          launching={launchingId === p.id}
+                          onLaunch={() => onLaunch(p)}
+                          onEdit={() => setEditing(p)}
+                          onFolder={() => api.openDataDir(p.id).catch((e) => setError(String(e)))}
+                          onRemove={() => setConfirmRemove(p)}
+                        />
+                      ))}
+                    </div>
+                  </section>
                 ))}
               </div>
             </>
@@ -762,7 +875,7 @@ export default function App() {
 
         {/* footer */}
         <footer className="py-6 text-center text-xs text-slate-600">
-          Roster is an independent tool and is not affiliated with, or endorsed by, Anthropic.
+          Roster is an independent tool and is not affiliated with, or endorsed by, Anthropic or OpenAI.
         </footer>
       </div>
 
@@ -775,7 +888,7 @@ export default function App() {
         />
       )}
       {settingsOpen && (
-        <SettingsDialog claude={claude} onSaved={setClaude} onClose={() => setSettingsOpen(false)} />
+        <SettingsDialog statuses={statuses} onSaved={setStatuses} onClose={() => setSettingsOpen(false)} />
       )}
       {importOpen && (
         <ImportDialog
@@ -788,9 +901,13 @@ export default function App() {
       {warn && (
         <Modal title="Heads up: first sign-in" onClose={() => setWarn(null)}>
           <p className="text-sm text-slate-300">
-            This account hasn't signed in yet, and another Claude window is open. Claude signs in through{" "}
-            <code className="rounded bg-slate-800 px-1 text-slate-200">claude://</code> links, so the login can land in
-            the wrong window. It's safest to fully quit other Claude windows first.
+            This account hasn't signed in yet, and another {APP_META[warn.app].label} window is open. Signing in hands
+            off to your browser and back through a{" "}
+            <code className="rounded bg-slate-800 px-1 text-slate-200">
+              {warn.app === "claude" ? "claude://" : "chatgpt://"}
+            </code>{" "}
+            link, so the login can land in the wrong window. It's safest to fully quit other{" "}
+            {APP_META[warn.app].label} windows first.
           </p>
           <div className="mt-6 flex justify-end gap-2">
             <button onClick={() => setWarn(null)} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800">
