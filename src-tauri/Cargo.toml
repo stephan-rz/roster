@@ -1,6 +1,6 @@
 [package]
 name = "roster"
-version = "0.2.2"
+version = "0.2.3"
 description = "Run multiple Claude Desktop accounts side by side"
 authors = ["Roster"]
 edition = "2021"
