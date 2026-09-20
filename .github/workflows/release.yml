@@ -45,6 +45,6 @@ jobs:
 
             Not code-signed yet — Windows SmartScreen may warn. Click **More info → Run anyway**.
 
-            Requires Claude Desktop. Unofficial — not affiliated with Anthropic.
+            Requires Claude Desktop, the ChatGPT desktop app, or both. Unofficial — not affiliated with Anthropic or OpenAI.
           releaseDraft: false
           prerelease: false
