@@ -239,6 +239,27 @@ fn launch_profile(state: State<AppState>, id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Hand a third-party sign-in callback to a specific profile.
+///
+/// Windows routes a `claude://` or `codex://` link to whichever instance owns
+/// the default data dir, so an OAuth redirect started in one profile lands in
+/// another. Delivering the URL together with that profile's `--user-data-dir`
+/// puts it where it belongs.
+#[tauri::command]
+fn deliver_link(state: State<AppState>, id: String, url: String) -> Result<(), String> {
+    let (app, data_dir, override_path) = {
+        let config = state.config.lock().unwrap();
+        let p = config
+            .profiles
+            .iter()
+            .find(|p| p.id == id)
+            .ok_or("Profile not found")?;
+        (p.app(), p.data_dir.clone(), config.path_for(p.app()).clone())
+    };
+    app.deliver_link(&data_dir, url.trim(), &override_path)?;
+    Ok(())
+}
+
 /// Re-read the signed-in account for each profile from disk and refresh the
 /// cache. Called by the UI on load and after a launch — not on every poll.
 #[tauri::command]
@@ -443,6 +464,7 @@ pub fn run() {
             remove_profile,
             pre_launch_check,
             launch_profile,
+            deliver_link,
             refresh_accounts,
             app_statuses,
             set_app_path,

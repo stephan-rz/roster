@@ -16,6 +16,9 @@ Neither Claude Desktop nor the ChatGPT desktop app has an account switcher — i
 - 🧩 **Both apps, one roster** — accounts are grouped per app, with the plan tiers each one actually offers
 - 🎨 **Color-coded** — every account gets an accent color so you never mix them up
 - 👤 **Know who's who** — see the signed-in account's name, email, and (manually tagged) plan on each card
+- 🔗 **Sign-in links land in the right account** — third-party connectors (Figma and friends) redirect back on a
+  `claude://` / `codex://` link that Windows always hands to the *default* instance; paste it into Roster and it goes
+  where you started the flow
 - ⚡ **Import existing logins** — adopt the accounts you're already signed into, no re-login
 - 🚀 **One-click launch** — open one profile, or all of them
 

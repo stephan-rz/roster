@@ -56,6 +56,16 @@ impl AppKind {
         }
     }
 
+    /// The URL scheme the app registers with Windows, which its third-party
+    /// sign-in callbacks come back on. Note ChatGPT's is `codex`, not
+    /// `chatgpt` — it ships inside the OpenAI.Codex package.
+    pub fn url_scheme(&self) -> &'static str {
+        match self {
+            AppKind::Claude => "claude",
+            AppKind::ChatGpt => "codex",
+        }
+    }
+
     pub fn exe_name(&self) -> &'static str {
         match self {
             AppKind::Claude => "Claude.exe",
@@ -282,9 +292,63 @@ impl AppKind {
     /// survives the app's frequent self-updates. Falls back to spawning the exe
     /// directly for non-Store installs.
     pub fn launch(&self, data_dir: &str, override_path: &Option<String>) -> Result<u32, String> {
+        self.launch_with(data_dir, None, override_path)
+    }
+
+    /// Hand a sign-in callback URL to the instance that owns `data_dir`.
+    ///
+    /// Both apps register their URL scheme on the *package*, so a callback
+    /// coming back from the browser carries no profile and Windows always
+    /// delivers it to whichever instance holds the default data dir. Passing
+    /// the URL alongside `--user-data-dir` instead routes it by profile: the
+    /// activated process resolves to that profile's single-instance lock, and
+    /// the instance holding it receives the URL.
+    pub fn deliver_link(
+        &self,
+        data_dir: &str,
+        url: &str,
+        override_path: &Option<String>,
+    ) -> Result<u32, String> {
+        self.validate_link(url)?;
+        self.launch_with(data_dir, Some(url), override_path)
+    }
+
+    /// Reject anything that isn't a plain callback URL for this app.
+    ///
+    /// The URL is pasted by hand and ends up in a command line, so beyond
+    /// checking the scheme we refuse whitespace and quotes — which no real
+    /// callback contains but which would let a stray string be read as extra
+    /// command-line switches.
+    fn validate_link(&self, url: &str) -> Result<(), String> {
+        let prefix = format!("{}://", self.url_scheme());
+        if !url.starts_with(&prefix) {
+            return Err(format!(
+                "That doesn't look like a {} sign-in link — it should start with {}",
+                self.label(),
+                prefix
+            ));
+        }
+        if url.len() > 4096 {
+            return Err("That link is too long to be a sign-in callback.".into());
+        }
+        if url.chars().any(|c| c.is_whitespace() || c.is_control() || c == '"') {
+            return Err("That link contains spaces or quotes, so it isn't a valid callback URL.".into());
+        }
+        Ok(())
+    }
+
+    fn launch_with(
+        &self,
+        data_dir: &str,
+        url: Option<&str>,
+        override_path: &Option<String>,
+    ) -> Result<u32, String> {
         fs::create_dir_all(data_dir).ok();
-        let arg = format!("--user-data-dir=\"{}\"", data_dir);
-        if let Ok(pid) = sys::launch_via_aumid(self.aumid(), &arg) {
+        let mut args = format!("--user-data-dir=\"{}\"", data_dir);
+        if let Some(u) = url {
+            args.push_str(&format!(" \"{}\"", u));
+        }
+        if let Ok(pid) = sys::launch_via_aumid(self.aumid(), &args) {
             return Ok(pid);
         }
         let exe = self.detect_exe(override_path).ok_or_else(|| {
@@ -293,8 +357,12 @@ impl AppKind {
                 self.label()
             )
         })?;
-        let child = std::process::Command::new(&exe)
-            .arg(format!("--user-data-dir={}", data_dir))
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.arg(format!("--user-data-dir={}", data_dir));
+        if let Some(u) = url {
+            cmd.arg(u);
+        }
+        let child = cmd
             .spawn()
             .map_err(|e| format!("Couldn't launch {}: {}", exe.display(), e))?;
         Ok(child.id())

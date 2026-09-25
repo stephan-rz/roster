@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   api,
+  appForLink,
   APP_META,
   APP_ORDER,
   PALETTE,
@@ -67,6 +68,12 @@ const Icon = {
   Download: (p: any) => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}>
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+    </svg>
+  ),
+  Link: (p: any) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" {...p}>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
     </svg>
   ),
   GitHub: (p: any) => (
@@ -455,6 +462,130 @@ function SettingsDialog({
   );
 }
 
+/* ------------------------------- sign-in link dialog ------------------------------- */
+/**
+ * Both apps register their URL scheme on the package, not per instance, so
+ * Windows hands every sign-in callback to whichever instance owns the default
+ * data dir. Pasting the link here delivers it to the profile that actually
+ * started the flow.
+ */
+function LinkDialog({
+  profiles,
+  onDelivered,
+  onClose,
+}: {
+  profiles: Profile[];
+  onDelivered: (name: string) => void;
+  onClose: () => void;
+}) {
+  const [url, setUrl] = useState("");
+  const [target, setTarget] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const trimmed = url.trim();
+  const app = trimmed ? appForLink(trimmed) : null;
+  const matches = app ? profiles.filter((p) => p.app === app) : [];
+  const chosen = matches.find((p) => p.id === target) ?? null;
+
+  async function deliver() {
+    if (!chosen) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deliverLink(chosen.id, trimmed);
+      onDelivered(chosen.name);
+      onClose();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Deliver a sign-in link" onClose={onClose}>
+      <p className="text-xs text-slate-500">
+        Connecting something like Figma sends you to your browser and back on a{" "}
+        <code className="rounded bg-slate-800 px-1 text-slate-300">claude://</code> or{" "}
+        <code className="rounded bg-slate-800 px-1 text-slate-300">codex://</code> link. Windows always hands that to
+        the default instance. Paste it here to send it to the right account instead.
+      </p>
+
+      <label className="mt-4 block text-sm font-medium text-slate-300">Sign-in link</label>
+      <textarea
+        autoFocus
+        rows={3}
+        value={url}
+        onChange={(e) => {
+          setUrl(e.target.value);
+          setError(null);
+        }}
+        placeholder="claude://…"
+        className="mt-1.5 w-full resize-none break-all rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 font-mono text-xs text-slate-100 outline-none placeholder:text-slate-500 focus:border-indigo-500"
+      />
+
+      {trimmed && !app && (
+        <div className="mt-2 rounded-lg border border-amber-800 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          That isn't a link Roster can route. It should start with <code>claude://</code> or <code>codex://</code>.
+        </div>
+      )}
+
+      {app && (
+        <>
+          <div className="mt-4 flex items-center gap-2 text-sm font-medium text-slate-300">
+            Send to <AppChip app={app} />
+          </div>
+          {matches.length === 0 ? (
+            <div className="mt-2 rounded-lg border border-slate-700 bg-slate-800/40 px-3 py-2 text-xs text-slate-400">
+              No {APP_META[app].label} accounts in Roster yet.
+            </div>
+          ) : (
+            <div className="mt-2 space-y-1.5">
+              {matches.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => setTarget(p.id)}
+                  className={`flex w-full items-center gap-2.5 rounded-xl border px-3 py-2 text-left transition ${
+                    target === p.id
+                      ? "border-indigo-500 bg-indigo-500/10"
+                      : "border-slate-800 bg-slate-800/30 hover:bg-slate-800"
+                  }`}
+                >
+                  <span className="h-5 w-5 shrink-0 rounded-full" style={{ backgroundColor: p.color }} />
+                  <span className="min-w-0 flex-1 truncate text-sm text-slate-100">{p.name}</span>
+                  <span className={`shrink-0 text-[11px] ${p.running ? "text-emerald-400" : "text-slate-500"}`}>
+                    {p.running ? "Running" : "Will start"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {error && (
+        <div className="mt-3 rounded-lg border border-rose-900 bg-rose-950/50 px-3 py-2 text-xs text-rose-200">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-6 flex justify-end gap-2">
+        <button onClick={onClose} className="rounded-xl px-4 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800">
+          Cancel
+        </button>
+        <button
+          disabled={!chosen || busy}
+          onClick={deliver}
+          className="rounded-xl bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400 disabled:opacity-50"
+        >
+          {busy ? "Delivering…" : "Deliver"}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 /* ------------------------------- import dialog ------------------------------- */
 type ImportRow = { cand: ImportCandidate; selected: boolean; name: string; color: string };
 
@@ -604,6 +735,8 @@ export default function App() {
   const [editing, setEditing] = useState<Profile | "new" | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState(false);
   const [warn, setWarn] = useState<Profile | null>(null);
@@ -795,6 +928,15 @@ export default function App() {
           </div>
         )}
 
+        {notice && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-emerald-900 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-200">
+            {notice}
+            <button onClick={() => setNotice(null)} className="shrink-0 text-xs text-emerald-400 hover:text-emerald-200">
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {/* body */}
         <main className="flex-1">
           {loading ? (
@@ -830,6 +972,13 @@ export default function App() {
                   {profiles.length} account{profiles.length === 1 ? "" : "s"}
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setLinkOpen(true)}
+                    title="Send a third-party sign-in link to the right account"
+                    className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                  >
+                    <Icon.Link className="h-4 w-4" /> Sign-in link
+                  </button>
                   <button
                     onClick={() => setImportOpen(true)}
                     className="inline-flex items-center gap-2 rounded-xl border border-slate-700 bg-slate-800/40 px-3 py-1.5 text-sm font-medium text-slate-300 hover:bg-slate-800"
@@ -898,13 +1047,23 @@ export default function App() {
           onClose={() => setImportOpen(false)}
         />
       )}
+      {linkOpen && (
+        <LinkDialog
+          profiles={profiles}
+          onDelivered={(name) => {
+            setNotice(`Sign-in link sent to ${name}.`);
+            setTimeout(() => refreshStatus(), 1500);
+          }}
+          onClose={() => setLinkOpen(false)}
+        />
+      )}
       {warn && (
         <Modal title="Heads up: first sign-in" onClose={() => setWarn(null)}>
           <p className="text-sm text-slate-300">
             This account hasn't signed in yet, and another {APP_META[warn.app].label} window is open. Signing in hands
             off to your browser and back through a{" "}
             <code className="rounded bg-slate-800 px-1 text-slate-200">
-              {warn.app === "claude" ? "claude://" : "chatgpt://"}
+              {APP_META[warn.app].scheme}://
             </code>{" "}
             link, so the login can land in the wrong window. It's safest to fully quit other{" "}
             {APP_META[warn.app].label} windows first.

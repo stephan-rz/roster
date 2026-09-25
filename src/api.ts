@@ -7,7 +7,16 @@ export const APP_ORDER: AppKind[] = ["claude", "chatgpt"];
 
 export const APP_META: Record<
   AppKind,
-  { label: string; vendor: string; plans: string[]; chip: string; dot: string; exe: string }
+  {
+    label: string;
+    vendor: string;
+    plans: string[];
+    chip: string;
+    dot: string;
+    exe: string;
+    /** URL scheme its sign-in callbacks come back on. Must match Rust's `url_scheme`. */
+    scheme: string;
+  }
 > = {
   claude: {
     label: "Claude",
@@ -16,6 +25,7 @@ export const APP_META: Record<
     chip: "bg-orange-500/10 text-orange-300 ring-1 ring-inset ring-orange-500/25",
     dot: "bg-orange-400",
     exe: "Claude.exe",
+    scheme: "claude",
   },
   chatgpt: {
     label: "ChatGPT",
@@ -24,8 +34,16 @@ export const APP_META: Record<
     chip: "bg-slate-200/10 text-slate-200 ring-1 ring-inset ring-slate-400/25",
     dot: "bg-slate-300",
     exe: "ChatGPT.exe",
+    // ChatGPT ships inside the OpenAI.Codex package, so its scheme is `codex`.
+    scheme: "codex",
   },
 };
+
+/** Which app a pasted callback URL belongs to, or null if it matches none. */
+export function appForLink(url: string): AppKind | null {
+  const u = url.trim().toLowerCase();
+  return APP_ORDER.find((k) => u.startsWith(`${APP_META[k].scheme}://`)) ?? null;
+}
 
 export interface Account {
   email: string | null;
@@ -75,6 +93,7 @@ export const api = {
   removeProfile: (id: string) => invoke<Profile[]>("remove_profile", { id }),
   preLaunchCheck: (id: string) => invoke<LaunchCheck>("pre_launch_check", { id }),
   launchProfile: (id: string) => invoke<void>("launch_profile", { id }),
+  deliverLink: (id: string, url: string) => invoke<void>("deliver_link", { id, url }),
   appStatuses: () => invoke<AppStatus[]>("app_statuses"),
   setAppPath: (app: AppKind, path: string | null) =>
     invoke<AppStatus[]>("set_app_path", { app, path }),
